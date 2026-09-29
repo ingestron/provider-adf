@@ -1,0 +1,86 @@
+apiVersion: ingestron.project/v1
+id: connector_faker
+providers:
+  packages:
+    faker:
+      source: faker
+      version: 0.3.0
+    adf:
+      source: adf
+      version: 4.0.0
+  configurations:
+    batch:
+      package: adf
+      binding: factory
+defaults:
+  provider: batch
+environments:
+  dev:
+    apiVersion: ingestron.environment/v1
+    environment: dev
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-synthetic-demo
+connections:
+  demo:
+    package: faker
+    sourceId: synthetic_users
+    tenantId: demo
+    settings:
+      count: 3
+      seed: 42
+      parallelism: 1
+flows:
+  - apiVersion: ingestron.flow/v1
+    kind: ingestion
+    id: users_batch
+    provider: batch
+    ingestion:
+      connection: demo
+      timeoutSeconds: 120
+      execution:
+        mode: adf-batch
+        azure:
+          storageAccount: syntheticstore
+          container: landing
+          prefix: faker
+          vaultUrl: https://synthetic.vault.azure.net
+          identityClientId: 00000000-0000-0000-0000-000000000001
+        compute:
+          pythonExecutable: /opt/ingestron/faker/bin/python
+          factoryName: synthetic-factory
+          pipelineName: faker_snapshot
+          batchAccountUrl: https://synthetic.australiaeast.batch.azure.com
+          poolName: shared
+          workerIdentityResourceId: /subscriptions/00000000-0000-0000-0000-000000000001/resourcegroups/synthetic/providers/Microsoft.ManagedIdentity/userAssignedIdentities/worker
+          storageAccount: syntheticstore
+          resourceFolder: assets/faker
+          timeout: 00.01:00:00
+          pollIntervalSeconds: 30
+    tables:
+      users:
+        source:
+          stream: users
+        contract:
+          apiVersion: v3.1.0
+          kind: DataContract
+          id: demo-users
+          name: Synthetic users
+          version: 1.0.0
+          status: draft
+          description:
+            purpose: Synthetic protocol and engine qualification. No real personal data.
+          schema:
+            - name: users
+              logicalType: object
+              physicalType: table
+              properties:
+                - name: id
+                  logicalType: integer
+                  physicalType: BIGINT
+                  required: true
+                - name: age
+                  logicalType: integer
+                  physicalType: BIGINT
+                  required: true

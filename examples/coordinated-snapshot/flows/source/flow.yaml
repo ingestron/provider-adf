@@ -1,0 +1,41 @@
+apiVersion: ingestron.flow/v1
+kind: ingestion
+id: source
+ingestion:
+  target:
+    linkedService: landing_adls
+    fileSystem: landing
+    path: retail
+  preset: snapshots:strict
+  handover:
+    binding: files
+defaults:
+  source:
+    kind: azure-sql
+    linkedService: source_sql
+    schema: dbo
+    table: customers
+    consistency: frozen-extract
+tables:
+  customers:
+    contract:
+      apiVersion: v3.1.0
+      kind: DataContract
+      id: customers
+      name: customers
+      version: 1.0.0
+      status: draft
+      schema:
+        - name: customers
+          logicalType: object
+          physicalType: table
+          properties:
+            - name: id
+              logicalType: integer
+              physicalType: BIGINT
+              required: true
+              primaryKey: true
+            - name: name
+              logicalType: string
+              physicalType: STRING
+provider: landing

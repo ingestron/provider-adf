@@ -1,0 +1,16 @@
+apiVersion: ingestron.extension-pack/v1
+id: sql-snapshot
+version: 4.2.0
+description: Guarded frozen SQL snapshot defaults; infrastructure remains project-owned.
+extends:
+  provider: adf-native
+  version: 4.2.0
+  platform: adf
+  contract: snapshot-presets
+  contractVersion: 1.0.0
+activities:
+  strict:
+    uses: copy
+    with:
+      standard: snapshot-land@v1
+      allowEmpty: false

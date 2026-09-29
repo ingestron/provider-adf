@@ -1,0 +1,88 @@
+apiVersion: ingestron.project/v1
+id: sales_connector
+providers:
+  packages:
+    postgres:
+      source: postgres
+      version: 0.12.0
+    adf:
+      source: adf
+      version: 4.0.0
+  configurations:
+    landing:
+      package: adf
+      binding: factory
+defaults:
+  provider: landing
+environments:
+  dev:
+    apiVersion: ingestron.environment/v1
+    environment: dev
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-connector-demo
+      sales_database:
+        host: 127.0.0.1
+        port: 55439
+        user: postgres
+        password:
+          $secret:
+            vaultUrl: https://synthetic.vault.azure.net
+            name: sales-password
+            identityClientId: 00000000-0000-0000-0000-000000000001
+flows:
+  - apiVersion: ingestron.flow/v1
+    kind: ingestion
+    id: sales_snapshot
+    provider: landing
+    ingestion:
+      connection: sales
+      timeoutSeconds: 120
+      execution:
+        mode: adf-batch
+        azure:
+          storageAccount: syntheticstore
+          container: landing
+          prefix: faker
+          vaultUrl: https://synthetic.vault.azure.net
+          identityClientId: 00000000-0000-0000-0000-000000000001
+        compute:
+          pythonExecutable: /opt/ingestron/postgres/bin/python
+          factoryName: synthetic-factory
+          pipelineName: faker_snapshot
+          batchAccountUrl: https://synthetic.australiaeast.batch.azure.com
+          poolName: shared
+          workerIdentityResourceId: /subscriptions/00000000-0000-0000-0000-000000000001/resourcegroups/synthetic/providers/Microsoft.ManagedIdentity/userAssignedIdentities/worker
+          storageAccount: syntheticstore
+          resourceFolder: assets/faker
+          timeout: 00.01:00:00
+          pollIntervalSeconds: 30
+    tables:
+      customers:
+        source:
+          stream: public-customers
+        contract:
+          $resolve: contracts/customers.odcs.yaml
+      invoices:
+        source:
+          stream: public-invoices
+        contract:
+          $resolve: contracts/invoices.odcs.yaml
+      payments:
+        source:
+          stream: public-payments
+        contract:
+          $resolve: contracts/payments.odcs.yaml
+connections:
+  sales:
+    package: postgres
+    sourceId: sales_erp
+    tenantId: demo_nz
+    binding: sales_database
+    settings:
+      database: postgres
+      filter_schemas:
+        - public
+      default_replication_method: FULL_TABLE
+      json_as_object: true

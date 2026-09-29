@@ -1,0 +1,8 @@
+{
+  "connector": "postgres@0.10.0",
+  "mode": "customer-operated",
+  "sourceId": "erp",
+  "tenantId": "demo",
+  "configEnv": "INGESTRON_TAP_CONFIG",
+  "timeoutSeconds": 600
+}

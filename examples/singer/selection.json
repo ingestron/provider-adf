@@ -1,0 +1,15 @@
+{
+  "public-orders": {
+    "name": "orders",
+    "fields": {
+      "id": { "type": "integer", "nullable": false },
+      "amount": {
+        "type": "decimal",
+        "precision": 20,
+        "scale": 2,
+        "nullable": true
+      },
+      "tags": { "type": "json", "nullable": true }
+    }
+  }
+}

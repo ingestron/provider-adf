@@ -1,0 +1,84 @@
+apiVersion: ingestron.project/v1
+id: retail
+providers:
+  packages:
+    adf:
+      source: adf
+      version: 2.3.1
+    databricks:
+      source: databricks
+      version: 2.1.0
+  configurations:
+    landing:
+      package: adf
+      binding: factory
+      packs:
+        - snapshots
+    publisher:
+      package: databricks
+      binding: engine
+      options:
+        publication:
+          workspaceRoot: /Workspace/Shared/retail_publication/{{env}}
+          existingClusterId: "{{values.clusterId}}"
+          runAsServicePrincipal: "{{values.publisherPrincipal}}"
+          permissions:
+            - group_name: data-engineers
+              level: CAN_MANAGE_RUN
+    processing:
+      package: databricks
+      binding: engine
+      options:
+        deployment:
+          mode: development
+          rootPath: /Workspace/Shared/retail_processing/{{env}}
+  packs:
+    snapshots:
+      source: ingestron/provider-adf/packs/sql-snapshot/pack.yaml
+      version: 2.3.1
+defaults:
+  provider: landing
+environments:
+  dev:
+    apiVersion: ingestron.environment/v1
+    environment: dev
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-retail-dev
+      engine:
+        kind: databricks
+        host: https://example.invalid
+        catalog: retail_dev
+      files:
+        kind: adls
+        accountName: "{{values.storageAccount}}"
+    values:
+      storageAccount: retailsampledev
+      publisherNotebook: /Workspace/Shared/retail_publication/dev/files/notebooks/retail_source_customers
+      publisherPrincipal: retail-publisher-dev
+      clusterId: 0123-exampledev
+  prod:
+    apiVersion: ingestron.environment/v1
+    environment: prod
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-retail-prod
+      engine:
+        kind: databricks
+        host: https://example.invalid
+        catalog: retail_prod
+      files:
+        kind: adls
+        accountName: "{{values.storageAccount}}"
+    values:
+      storageAccount: retailsampleprod
+      publisherNotebook: /Workspace/Shared/retail_publication/prod/files/notebooks/retail_source_customers
+      publisherPrincipal: retail-publisher-prod
+      clusterId: 0123-exampleprod
+flows:
+  - $resolve: ./flows/source/flow.yaml
+  - $resolve: ./flows/publish/flow.yaml
+  - $resolve: ./flows/current/flow.yaml
+  - $resolve: ./flows/reporting/flow.yaml

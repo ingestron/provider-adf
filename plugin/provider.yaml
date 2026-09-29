@@ -1,0 +1,637 @@
+apiVersion: ingestron.provider/v1
+id: adf-native
+version: 4.2.0
+platform: adf
+compatibility:
+  plan: ingestron.plan/v1
+  minimumCli: 4.2.0
+  requiredFeatures:
+    - native-project
+    - delivery-exports
+    - export-groups
+    - model-inputs
+    - extension-packs
+    - ingestion-presets
+    - relation-handovers
+    - project-connections
+    - odcs-connections
+    - connector-runtime-capabilities
+    - project-assembly
+configurationSchema: ./configuration.schema.json
+planner:
+  apiVersion: ingestron.provider-planning/v1
+  module: ./index.mjs
+renderer:
+  apiVersion: ingestron.provider-generation/v1
+  module: ./index.mjs
+activities:
+  copy: ./activities/copy/activity.yaml
+standards:
+  - id: metadata-snapshot-land@v1
+    description: Reviewed metadata coordinator and reusable SQL snapshot worker
+    sourceKinds:
+      - azure-sql
+      - sql-server
+    dataFlow: forbidden
+  - id: snapshot-land@v1
+    description: Frozen SQL source to guarded Parquet landing
+    sourceKinds:
+      - azure-sql
+      - sql-server
+    dataFlow: forbidden
+  - id: immutable-file-copy@v1
+    description: One completed immutable file to binary-preserving landing
+    sourceKinds:
+      - adls
+      - sftp
+    dataFlow: forbidden
+  - id: snapshot-to-databricks@v1
+    description: Copy a frozen SQL snapshot and invoke conditional Databricks publication
+    sourceKinds:
+      - azure-sql
+      - sql-server
+    dataFlow: forbidden
+commands:
+  apiVersion: ingestron.provider-commands/v1
+  execution: offline-json
+  module: ./commands.mjs
+  definitions:
+    - name: discover import
+      description:
+        Review supplied table metadata as contract proposals; no source
+        connection or file changes.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - tables
+        properties:
+          tables:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - name
+                - columns
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                columns:
+                  type: array
+                  minItems: 1
+                  maxItems: 500
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required:
+                      - name
+                      - type
+                      - nullable
+                    properties:
+                      name:
+                        type: string
+                        minLength: 1
+                        maxLength: 128
+                      type:
+                        type: string
+                        minLength: 1
+                        maxLength: 64
+                      nullable:
+                        type: boolean
+    - name: deploy inspect
+      description:
+        Inspect supplied native deployment assets; no live validation,
+        target diff or deployment.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - artifact
+        properties:
+          artifact:
+            type: object
+    - name: connection prepare
+      description: Prepare a project-resolved connection, selected fields and
+        runtime-only secrets
+      inputSchema:
+        type: object
+        additionalProperties: true
+    - name: connector contracts
+      description: Export reviewed ODCS contracts
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - review
+        properties:
+          review:
+            type: object
+    - name: compute prepare
+      description:
+        Prepare a bounded managed-identity Batch pipeline for a reviewed
+        Python workload; no deployment or pool changes.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - factoryName
+          - pipelineName
+          - batchAccountUrl
+          - poolName
+          - workerIdentityResourceId
+          - storageAccount
+          - resourceFolder
+          - files
+          - entryPoint
+          - configFile
+          - timeout
+          - pollIntervalSeconds
+          - recovery
+        properties:
+          pythonExecutable:
+            type: string
+            minLength: 1
+          factoryName:
+            type: string
+            minLength: 1
+          pipelineName:
+            type: string
+            minLength: 1
+          batchAccountUrl:
+            type: string
+            minLength: 1
+          poolName:
+            type: string
+            minLength: 1
+          workerIdentityResourceId:
+            type: string
+            minLength: 1
+          storageAccount:
+            type: string
+            minLength: 1
+          resourceFolder:
+            type: string
+            minLength: 1
+          files:
+            type: array
+            items:
+              type: string
+            minItems: 1
+            maxItems: 100
+          entryPoint:
+            type: string
+            minLength: 1
+          configFile:
+            type: string
+            minLength: 1
+          timeout:
+            type: string
+            minLength: 1
+          pollIntervalSeconds:
+            type: integer
+          recovery:
+            type: string
+            minLength: 1
+    - name: compute pool prepare
+      description:
+        Prepare a shared pool Spot autoscale policy; operator review and
+        Azure evaluation required before applying.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - maxNodes
+        properties:
+          maxNodes:
+            type: integer
+    - name: discover source prepare
+      description:
+        Prepare a bounded SQL or format-specific file metadata reader; no
+        source access inside the CLI.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - sourceId
+          - sourceKind
+        properties:
+          sourceId:
+            type: string
+            minLength: 1
+            maxLength: 512
+          sourceKind:
+            enum:
+              - azure-sql
+              - adls
+          format:
+            enum:
+              - csv
+              - tsv
+              - json
+              - jsonl
+              - parquet
+              - xml
+              - xlsx
+          schemas:
+            type: array
+            items:
+              type: string
+              minLength: 1
+              maxLength: 512
+          tables:
+            type: array
+            items:
+              type: string
+              minLength: 1
+              maxLength: 512
+          sampleRows:
+            type: integer
+          datasets:
+            type: array
+            maxItems: 100
+            items:
+              type: object
+              additionalProperties: false
+              required:
+                - name
+                - paths
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                paths:
+                  type: array
+                  maxItems: 100
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 512
+                sheet:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                partitionColumns:
+                  type: array
+                  maxItems: 20
+                  items:
+                    type: string
+                    minLength: 1
+                    maxLength: 512
+    - name: discover prepare
+      description:
+        Generate a metadata-only ADF Copy pipeline and runnable deployment
+        bundle; no Azure calls.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - useCase
+          - factoryName
+          - location
+          - mode
+          - sourceKind
+          - sourceLinkedService
+          - sinkLinkedService
+          - fileSystem
+          - schemas
+        properties:
+          useCase:
+            type: string
+            minLength: 1
+            maxLength: 128
+          factoryName:
+            type: string
+            minLength: 1
+            maxLength: 128
+          location:
+            type: string
+            minLength: 1
+            maxLength: 128
+          mode:
+            enum:
+              - new-factory
+              - existing-factory
+          sourceKind:
+            enum:
+              - azure-sql
+              - sql-server
+              - postgresql
+          sourceLinkedService:
+            type: string
+            minLength: 1
+            maxLength: 128
+          sinkLinkedService:
+            type: string
+            minLength: 1
+            maxLength: 128
+          fileSystem:
+            type: string
+            minLength: 1
+            maxLength: 128
+          tables:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+              minLength: 1
+              maxLength: 128
+          schemas:
+            type: array
+            minItems: 1
+            maxItems: 20
+            items:
+              type: string
+              minLength: 1
+              maxLength: 128
+    - name: discover contracts
+      description:
+        Convert exported catalogue rows into draft ODCS files for review;
+        keys require explicit acceptance.
+      inputSchema:
+        oneOf:
+          - type: object
+            additionalProperties: false
+            required:
+              - sourceId
+              - sourceKind
+              - rows
+            properties:
+              sourceId:
+                type: string
+                minLength: 1
+                maxLength: 128
+              sourceKind:
+                enum:
+                  - azure-sql
+                  - sql-server
+                  - postgresql
+              acceptDeclaredKeys:
+                type: boolean
+              rows:
+                type: array
+                minItems: 1
+                maxItems: 10000
+                items:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - schema_name
+                    - table_name
+                    - column_name
+                    - ordinal_position
+                    - data_type
+                    - nullable
+                    - primary_key
+                  properties:
+                    schema_name:
+                      type: string
+                      minLength: 1
+                      maxLength: 128
+                    table_name:
+                      type: string
+                      minLength: 1
+                      maxLength: 128
+                    column_name:
+                      type: string
+                      minLength: 1
+                      maxLength: 128
+                    ordinal_position:
+                      type: integer
+                    data_type:
+                      type: string
+                      minLength: 1
+                      maxLength: 128
+                    nullable:
+                      enum:
+                        - true
+                        - false
+                        - 0
+                        - 1
+                    primary_key:
+                      enum:
+                        - true
+                        - false
+                        - 0
+                        - 1
+                    precision:
+                      type:
+                        - integer
+                        - "null"
+                    scale:
+                      type:
+                        - integer
+                        - "null"
+                    max_length:
+                      type:
+                        - integer
+                        - "null"
+          - type: object
+            additionalProperties: false
+            required:
+              - apiVersion
+              - sourceId
+              - sourceKind
+              - format
+              - datasets
+            properties:
+              apiVersion:
+                enum:
+                  - ingestron.file-metadata/v1
+              sourceId:
+                type: string
+                minLength: 1
+                maxLength: 512
+              sourceKind:
+                enum:
+                  - adls
+              format:
+                enum:
+                  - csv
+                  - tsv
+                  - json
+                  - jsonl
+                  - parquet
+                  - xml
+                  - xlsx
+              datasets:
+                type: array
+                minItems: 1
+                maxItems: 100
+                items:
+                  type: object
+    - name: deploy prepare
+      description: Prepare a reviewed discovery deployment bundle for a new or
+        existing factory; no Azure calls.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - useCase
+          - factoryName
+          - location
+          - mode
+          - sourceKind
+          - sourceLinkedService
+          - sinkLinkedService
+          - fileSystem
+          - schemas
+        properties:
+          useCase:
+            type: string
+            minLength: 1
+            maxLength: 128
+          factoryName:
+            type: string
+            minLength: 1
+            maxLength: 128
+          location:
+            type: string
+            minLength: 1
+            maxLength: 128
+          mode:
+            enum:
+              - new-factory
+              - existing-factory
+          sourceKind:
+            enum:
+              - azure-sql
+              - sql-server
+              - postgresql
+          sourceLinkedService:
+            type: string
+            minLength: 1
+            maxLength: 128
+          sinkLinkedService:
+            type: string
+            minLength: 1
+            maxLength: 128
+          fileSystem:
+            type: string
+            minLength: 1
+            maxLength: 128
+          tables:
+            type: array
+            maxItems: 100
+            items:
+              type: string
+              minLength: 1
+              maxLength: 128
+          schemas:
+            type: array
+            minItems: 1
+            maxItems: 20
+            items:
+              type: string
+              minLength: 1
+              maxLength: 128
+    - name: project assemble
+      description: Assemble one scoped platform project without deployment
+      inputSchema:
+        type: object
+        additionalProperties: true
+lifecycle:
+  apiVersion: ingestron.provider-lifecycle/v1
+  module: ./lifecycle.mjs
+capabilities:
+  artifactKinds:
+    - native-pipeline
+    - file-project
+  delivery: true
+  handovers:
+    - files
+  packContracts:
+    snapshot-presets:
+      version: 1.0.0
+      activities:
+        - copy
+connectorRuntimes:
+  ingestron.snapshot/python/v1:
+    selectionSchema:
+      type: object
+      additionalProperties:
+        type: object
+        properties:
+          name:
+            type: string
+            minLength: 1
+          fields:
+            type: object
+            additionalProperties:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - integer
+                    - string
+                    - boolean
+                    - number
+                    - decimal
+                    - json
+                nullable:
+                  type: boolean
+                precision:
+                  type: integer
+                scale:
+                  type: integer
+              required:
+                - type
+                - nullable
+              additionalProperties: false
+        required:
+          - name
+          - fields
+        additionalProperties: false
+    executionSchema:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+            - adf-batch
+        azure:
+          type: object
+          properties:
+            storageAccount:
+              type: string
+              minLength: 1
+            container:
+              type: string
+              minLength: 1
+            prefix:
+              type: string
+              minLength: 1
+            vaultUrl:
+              type: string
+              minLength: 1
+            identityClientId:
+              type: string
+              minLength: 1
+          required:
+            - storageAccount
+            - container
+            - prefix
+            - vaultUrl
+            - identityClientId
+          additionalProperties: false
+        compute:
+          type: object
+          additionalProperties: true
+      required:
+        - mode
+        - azure
+        - compute
+      additionalProperties: false
+    prepareCommand: connection prepare
+    contractsCommand: connector contracts
+    executionPlatforms:
+      - adf
+projectAssembly:
+  apiVersion: ingestron.project-assembly/v1
+  command: project assemble

@@ -1,0 +1,77 @@
+{
+  "notes": "Reviewed connection examples. Replace synthetic hosts/database names and grant required permissions before use. No secrets are embedded.",
+  "azureSql": {
+    "name": "northwind_azure_source",
+    "properties": {
+      "type": "AzureSqlDatabase",
+      "version": "2.0",
+      "typeProperties": {
+        "server": "sql-demo.database.windows.net",
+        "database": "northwind",
+        "authenticationType": "SystemAssignedManagedIdentity",
+        "encrypt": "mandatory",
+        "trustServerCertificate": false
+      }
+    }
+  },
+  "sqlServer": {
+    "name": "northwind_private_source",
+    "properties": {
+      "type": "SqlServer",
+      "version": "2.0",
+      "typeProperties": {
+        "server": "sql-demo.internal",
+        "database": "Northwind",
+        "authenticationType": "SQL",
+        "userName": "metadata_reader",
+        "password": {
+          "type": "AzureKeyVaultSecret",
+          "store": {
+            "referenceName": "demo_vault",
+            "type": "LinkedServiceReference"
+          },
+          "secretName": "northwind-reader"
+        },
+        "encrypt": "mandatory",
+        "trustServerCertificate": false
+      },
+      "connectVia": {
+        "referenceName": "demo_self_hosted_ir",
+        "type": "IntegrationRuntimeReference"
+      }
+    }
+  },
+  "postgresql": {
+    "name": "pagila_source",
+    "properties": {
+      "type": "PostgreSqlV2",
+      "typeProperties": {
+        "server": "postgres-demo.internal",
+        "port": 5432,
+        "database": "pagila",
+        "username": "metadata_reader",
+        "authenticationType": "Basic",
+        "sslMode": 5,
+        "password": {
+          "type": "AzureKeyVaultSecret",
+          "store": {
+            "referenceName": "demo_vault",
+            "type": "LinkedServiceReference"
+          },
+          "secretName": "pagila-reader"
+        }
+      },
+      "connectVia": {
+        "referenceName": "demo_self_hosted_ir",
+        "type": "IntegrationRuntimeReference"
+      }
+    }
+  },
+  "metadataLake": {
+    "name": "metadata_lake",
+    "properties": {
+      "type": "AzureBlobFS",
+      "typeProperties": { "url": "https://demostorage.dfs.core.windows.net" }
+    }
+  }
+}

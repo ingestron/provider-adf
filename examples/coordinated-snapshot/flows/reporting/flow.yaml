@@ -1,0 +1,43 @@
+apiVersion: ingestron.flow/v1
+kind: transformation
+id: reporting
+requires:
+  customers:
+    dataset: retail.current.customers.current
+    select:
+      mode: same-run
+steps:
+  - id: customers
+    uses: materialized-view@v1
+    with:
+      pipelineId: source
+      targetTable: retail_{{env}}.reporting.customers
+      sources:
+        customers:
+          from: requires.customers
+      sqlFile: ./customers.sql
+publishes:
+  customers:
+    from: steps.customers.outputs.result
+    contract:
+      apiVersion: v3.1.0
+      kind: DataContract
+      id: customers
+      name: customers
+      version: 1.0.0
+      status: draft
+      schema:
+        - name: customers
+          logicalType: object
+          physicalType: table
+          properties:
+            - name: id
+              logicalType: integer
+              physicalType: BIGINT
+              required: true
+              primaryKey: true
+            - name: name
+              logicalType: string
+              physicalType: STRING
+provider: processing
+export: analytics

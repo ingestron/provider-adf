@@ -1,0 +1,78 @@
+{
+  "sourceId": "northwind_private",
+  "sourceKind": "sql-server",
+  "rows": [
+    {
+      "schema_name": "dbo",
+      "table_name": "Customers",
+      "column_name": "CustomerID",
+      "ordinal_position": 1,
+      "data_type": "nchar",
+      "nullable": false,
+      "primary_key": true,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "dbo",
+      "table_name": "Customers",
+      "column_name": "CompanyName",
+      "ordinal_position": 2,
+      "data_type": "nvarchar",
+      "nullable": false,
+      "primary_key": false,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "dbo",
+      "table_name": "Orders",
+      "column_name": "OrderID",
+      "ordinal_position": 1,
+      "data_type": "int",
+      "nullable": false,
+      "primary_key": true,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "dbo",
+      "table_name": "Orders",
+      "column_name": "Freight",
+      "ordinal_position": 2,
+      "data_type": "money",
+      "nullable": true,
+      "primary_key": false,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "dbo",
+      "table_name": "Order Details",
+      "column_name": "OrderID",
+      "ordinal_position": 1,
+      "data_type": "int",
+      "nullable": false,
+      "primary_key": true,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "dbo",
+      "table_name": "Order Details",
+      "column_name": "ProductID",
+      "ordinal_position": 2,
+      "data_type": "int",
+      "nullable": false,
+      "primary_key": true,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    }
+  ]
+}

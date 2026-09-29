@@ -1,0 +1,26 @@
+apiVersion: v3.1.0
+kind: DataContract
+id: sales-customers
+name: Sales customers
+version: 1.0.0
+status: draft
+description:
+  purpose: Authored contract for the fictional NZ sales source.
+schema:
+  - name: customers
+    logicalType: object
+    physicalType: table
+    properties:
+      - name: customer_id
+        logicalType: integer
+        physicalType: BIGINT
+        required: true
+        primaryKey: true
+      - name: customer_name
+        logicalType: string
+        physicalType: STRING
+        required: true
+      - name: country
+        logicalType: string
+        physicalType: STRING
+        required: true

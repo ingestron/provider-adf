@@ -1,0 +1,22 @@
+{
+  "useCase": "pagila",
+  "factoryName": "adf-ingestron-cli-demo",
+  "location": "australiaeast",
+  "mode": "existing-factory",
+  "sourceKind": "postgresql",
+  "sourceLinkedService": "pagila_source",
+  "sinkLinkedService": "metadata_lake",
+  "fileSystem": "discovery",
+  "schemas": ["public"],
+  "tables": [
+    "customer",
+    "address",
+    "city",
+    "country",
+    "payment",
+    "rental",
+    "inventory",
+    "store",
+    "staff"
+  ]
+}

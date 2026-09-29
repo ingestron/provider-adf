@@ -1,0 +1,28 @@
+{
+  "connector": "postgres@0.10.0",
+  "mode": "customer-operated",
+  "sourceId": "erp",
+  "tenantId": "demo",
+  "configEnv": "INGESTRON_TAP_CONFIG",
+  "timeoutSeconds": 600,
+  "azure": {
+    "storageAccount": "syntheticstore",
+    "container": "landing",
+    "prefix": "singer",
+    "vaultUrl": "https://synthetic.vault.azure.net",
+    "configSecret": "tap-config",
+    "identityClientId": "00000000-0000-0000-0000-000000000001"
+  },
+  "compute": {
+    "pythonExecutable": "/opt/ingestron/singer_postgres_0_10_0/bin/python",
+    "factoryName": "synthetic-factory",
+    "pipelineName": "connector_snapshot",
+    "batchAccountUrl": "https://synthetic.australiaeast.batch.azure.com",
+    "poolName": "shared",
+    "workerIdentityResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/resourcegroups/synthetic/providers/Microsoft.ManagedIdentity/userAssignedIdentities/worker",
+    "storageAccount": "syntheticstore",
+    "resourceFolder": "assets/singer",
+    "timeout": "00.01:00:00",
+    "pollIntervalSeconds": 30
+  }
+}

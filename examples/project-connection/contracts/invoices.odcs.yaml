@@ -1,0 +1,38 @@
+apiVersion: v3.1.0
+kind: DataContract
+id: sales-invoices
+name: Sales invoices
+version: 1.0.0
+status: draft
+description:
+  purpose: Authored contract for the fictional NZ sales source.
+schema:
+  - name: invoices
+    logicalType: object
+    physicalType: table
+    properties:
+      - name: invoice_id
+        logicalType: integer
+        physicalType: BIGINT
+        required: true
+        primaryKey: true
+      - name: customer_id
+        logicalType: integer
+        physicalType: BIGINT
+        required: true
+      - name: invoice_date
+        logicalType: string
+        physicalType: STRING
+        required: true
+      - name: currency
+        logicalType: string
+        physicalType: STRING
+        required: true
+      - name: net_amount
+        logicalType: number
+        physicalType: DECIMAL(20,2)
+        required: true
+      - name: tax_amount
+        logicalType: number
+        physicalType: DECIMAL(20,2)
+        required: true

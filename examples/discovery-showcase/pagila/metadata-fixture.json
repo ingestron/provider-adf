@@ -1,0 +1,54 @@
+{
+  "sourceId": "pagila",
+  "sourceKind": "postgresql",
+  "rows": [
+    {
+      "schema_name": "public",
+      "table_name": "customer",
+      "column_name": "customer_id",
+      "ordinal_position": 1,
+      "data_type": "int4",
+      "nullable": false,
+      "primary_key": true,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "public",
+      "table_name": "customer",
+      "column_name": "email",
+      "ordinal_position": 2,
+      "data_type": "varchar",
+      "nullable": true,
+      "primary_key": false,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "public",
+      "table_name": "payment",
+      "column_name": "payment_id",
+      "ordinal_position": 1,
+      "data_type": "int4",
+      "nullable": false,
+      "primary_key": true,
+      "precision": null,
+      "scale": null,
+      "max_length": null
+    },
+    {
+      "schema_name": "public",
+      "table_name": "payment",
+      "column_name": "amount",
+      "ordinal_position": 2,
+      "data_type": "numeric",
+      "nullable": false,
+      "primary_key": false,
+      "precision": 5,
+      "scale": 2,
+      "max_length": null
+    }
+  ]
+}

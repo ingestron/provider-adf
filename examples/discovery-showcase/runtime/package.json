@@ -1,0 +1,11 @@
+{
+  "name": "ingestron-discovery-showcase-loader",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "dependencies": {
+    "mssql": "12.7.2"
+  }
+}

@@ -1,0 +1,22 @@
+plugin/index.mjs
+node_modules/
+.venv/
+
+plugin/commands.mjs
+
+plugin/lifecycle.mjs
+plugin/schemas/
+build/
+examples/discovery-showcase/licenses/
+
+plugin/runtime-assets.mjs
+
+
+.pytest_cache/
+
+plugin/singer-assets.mjs
+
+# Byte-for-byte immutable data cache from demo-sources
+test/fixtures/connector-sales/expected.json
+
+connectors/*/runtime.json

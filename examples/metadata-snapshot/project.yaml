@@ -1,0 +1,137 @@
+apiVersion: ingestron.project/v1
+id: retail
+providers:
+  packages:
+    adf:
+      source: adf
+      version: 2.4.0
+  configurations:
+    landing:
+      package: adf
+      binding: factory
+defaults:
+  provider: landing
+environments:
+  dev:
+    apiVersion: ingestron.environment/v1
+    environment: dev
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-retail-dev
+  prod:
+    apiVersion: ingestron.environment/v1
+    environment: prod
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-retail-prod
+flows:
+  - apiVersion: ingestron.flow/v1
+    kind: ingestion
+    id: source
+    ingestion:
+      standard: metadata-snapshot-land@v1
+      target:
+        linkedService: landing_adls
+        fileSystem: landing
+        path: retail
+      group: sql
+      parallelism: 2
+    defaults:
+      source:
+        kind: azure-sql
+        linkedService: source_sql
+        schema: dbo
+        table: customers
+        consistency: frozen-extract
+    tables:
+      customers:
+        contract:
+          apiVersion: v3.1.0
+          kind: DataContract
+          id: customers
+          name: customers
+          version: 1.0.0
+          status: draft
+          schema:
+            - name: customers
+              logicalType: object
+              physicalType: table
+              properties:
+                - name: id
+                  logicalType: integer
+                  physicalType: BIGINT
+                  required: true
+                  primaryKey: true
+                - name: name
+                  logicalType: string
+                  physicalType: STRING
+      suppliers:
+        contract:
+          apiVersion: v3.1.0
+          kind: DataContract
+          id: customers
+          name: customers
+          version: 1.0.0
+          status: draft
+          schema:
+            - name: customers
+              logicalType: object
+              physicalType: table
+              properties:
+                - name: id
+                  logicalType: integer
+                  physicalType: BIGINT
+                  required: true
+                  primaryKey: true
+                - name: name
+                  logicalType: string
+                  physicalType: STRING
+        source:
+          table: suppliers
+    export: landing
+  - apiVersion: ingestron.flow/v1
+    kind: ingestion
+    id: empty
+    ingestion:
+      standard: metadata-snapshot-land@v1
+      target:
+        linkedService: landing_adls
+        fileSystem: landing
+        path: retail
+      group: sql
+      parallelism: 2
+      allowEmpty: true
+    defaults:
+      source:
+        kind: azure-sql
+        linkedService: source_sql
+        schema: dbo
+        table: customers
+        consistency: frozen-extract
+    tables:
+      demographics:
+        contract:
+          apiVersion: v3.1.0
+          kind: DataContract
+          id: customers
+          name: customers
+          version: 1.0.0
+          status: draft
+          schema:
+            - name: customers
+              logicalType: object
+              physicalType: table
+              properties:
+                - name: id
+                  logicalType: integer
+                  physicalType: BIGINT
+                  required: true
+                  primaryKey: true
+                - name: name
+                  logicalType: string
+                  physicalType: STRING
+        source:
+          table: demographics
+    export: landing

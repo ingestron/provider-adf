@@ -1,0 +1,22 @@
+apiVersion: ingestron.project/v1
+id: connector_demo
+providers:
+  packages:
+    adf:
+      source: adf
+      version: 2.9.0
+  configurations:
+    landing:
+      package: adf
+      binding: factory
+defaults:
+  provider: landing
+environments:
+  dev:
+    apiVersion: ingestron.environment/v1
+    environment: dev
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-connector-demo
+flows: []

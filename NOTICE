@@ -1,0 +1,15 @@
+Ingestron Azure Data Factory provider
+Copyright Otrera Limited.
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party material keeps its own terms and is not covered by the Apache
+licence above:
+
+- plugin/THIRD-PARTY-NOTICES.txt lists open-source components bundled into the
+  built plugin.
+- src/vendor/connectors: helpers copied from https://github.com/ingestron/connectors
+  (Apache-2.0). Provenance: src/vendor/connectors/provenance.json.
+- examples/discovery-showcase downloads public sample databases (Microsoft
+  Northwind, MIT; Pagila, PostgreSQL licence) at pinned revisions; see
+  examples/discovery-showcase/public-data.lock.json and its licenses folder.

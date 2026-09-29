@@ -1,0 +1,26 @@
+{
+  "cliVersion": "0.10.0",
+  "repository": "ingestron/provider-adf",
+  "examples": [
+    {
+      "path": "examples/sql-snapshot",
+      "environments": ["dev", "prod"],
+      "delivery": false
+    },
+    {
+      "path": "examples/immutable-file",
+      "environments": ["dev", "prod"],
+      "delivery": false
+    },
+    {
+      "path": "examples/snapshot-handover",
+      "environments": ["dev", "prod"],
+      "delivery": false
+    },
+    {
+      "path": "examples/metadata-snapshot",
+      "environments": ["dev", "prod"],
+      "delivery": true
+    }
+  ]
+}

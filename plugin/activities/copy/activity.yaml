@@ -1,0 +1,47 @@
+apiVersion: ingestron.activity/v1
+id: copy
+version: 1.0.0
+platform: adf
+description: Native snapshot or immutable-file landing, without Data Flow
+input: source
+output: files
+effect: read
+optionsSchema:
+  type: object
+  required: [standard, target]
+  properties:
+    standard:
+      enum:
+        [
+          snapshot-land@v1,
+          immutable-file-copy@v1,
+          snapshot-to-databricks@v1,
+          metadata-snapshot-land@v1,
+        ]
+    group:
+      type: string
+    parallelism:
+      type: integer
+      minimum: 1
+      maximum: 16
+    target:
+      type: object
+    handover:
+      type: object
+      additionalProperties: false
+      required: [binding]
+      properties:
+        binding: { type: string }
+    publication:
+      type: object
+    allowEmpty:
+      type: boolean
+  additionalProperties: false
+generator:
+  kind: native-pipeline
+  entrypoint: render
+requirements:
+  execution: adf-copy
+  features: [existing-linked-services]
+  sourceKinds: [azure-sql, sql-server, adls, sftp]
+  evidence: offline

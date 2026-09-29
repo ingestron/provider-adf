@@ -1,0 +1,20 @@
+{
+  "useCase": "northwind_azure",
+  "factoryName": "adf-ingestron-cli-demo",
+  "location": "australiaeast",
+  "mode": "existing-factory",
+  "sourceKind": "azure-sql",
+  "sourceLinkedService": "northwind_azure_source",
+  "sinkLinkedService": "metadata_lake",
+  "fileSystem": "discovery",
+  "schemas": ["dbo"],
+  "tables": [
+    "Customers",
+    "Orders",
+    "Order Details",
+    "Products",
+    "Categories",
+    "Suppliers",
+    "Shippers"
+  ]
+}

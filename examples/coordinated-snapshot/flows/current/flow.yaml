@@ -1,0 +1,49 @@
+apiVersion: ingestron.flow/v1
+kind: ingestion
+id: current
+ingestion:
+  standard: snapshot-with-history@v1
+  pipeline: source
+  target:
+    schema: current
+    historySchema: history
+  source:
+    delivery: complete-snapshot
+    scope: full-table
+    deletes: missing-keys
+  retention:
+    sourceDeliveries: externally-retained
+    period: P90D
+defaults:
+  source:
+    from: requires.completed
+tables:
+  customers:
+    contract:
+      apiVersion: v3.1.0
+      kind: DataContract
+      id: customers
+      name: customers
+      version: 1.0.0
+      status: draft
+      schema:
+        - name: customers
+          logicalType: object
+          physicalType: table
+          properties:
+            - name: id
+              logicalType: integer
+              physicalType: BIGINT
+              required: true
+              primaryKey: true
+            - name: name
+              logicalType: string
+              physicalType: STRING
+provider: processing
+export: analytics
+requires:
+  completed:
+    dataset: retail.publish.customers.completed
+    select:
+      mode: same-run
+    handover: files
