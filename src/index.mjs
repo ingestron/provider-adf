@@ -5,6 +5,7 @@ import {
   renderMetadata,
 } from "./metadata.mjs";
 import { validatePublication, publicationPipeline } from "./publication.mjs";
+import { qualityRules, qualityQuery, passingExpression } from "./quality.mjs";
 const check = (ok, message) => {
   if (!ok) throw new Error(message);
 };
@@ -65,7 +66,8 @@ export const standards = [
     delivery: "one preserved binary file per run",
   },
 ];
-export function expand({ flow, providerSource }) {
+const checked = new Set(["snapshot-land@v1", "snapshot-to-databricks@v1"]);
+export function expand({ flow, providerSource, columns = {} }) {
   check(flow.kind === "ingestion", "ADF standards require ingestion flows");
   strict(
     flow.ingestion,
@@ -91,11 +93,16 @@ export function expand({ flow, providerSource }) {
       !value.ingestion && !Object.keys(value.steps ?? {}).length,
       "ADF table ingestion/step overrides are not supported",
     );
+    // SQL snapshots check contract rules on the frozen source before Copy.
+    const quality =
+      checked.has(standard.id) && value.contract
+        ? qualityRules(value.contract, columns[table] ?? [])
+        : [];
     return {
       id: `copy_${table}`,
       uses: "copy@v1",
       select: [table],
-      with: flow.ingestion,
+      with: quality.length ? { ...flow.ingestion, quality } : flow.ingestion,
     };
   });
   return {
@@ -161,8 +168,13 @@ export function validate(plan) {
         "handover",
         "group",
         "parallelism",
+        "quality",
       ],
       "standard",
+    );
+    check(
+      w.quality === undefined || checked.has(w.standard),
+      "Contract quality checks apply to SQL snapshot standards only",
     );
     strict(
       t,
@@ -450,6 +462,60 @@ export function render(plan) {
         ],
       };
       const activities = [copy];
+      if (w.quality?.length) {
+        // Counts only: one aggregate over the frozen source, before any copy.
+        activities.unshift({
+          name: "CheckQuality",
+          type: "Lookup",
+          policy,
+          typeProperties: {
+            source: {
+              type: s.kind === "azure-sql" ? "AzureSqlSource" : "SqlSource",
+              sqlReaderQuery: qualityQuery(
+                w.quality,
+                n.columns,
+                s.schema,
+                s.table,
+              ),
+              partitionOption: "None",
+            },
+            dataset: { type: "DatasetReference", referenceName: src },
+            firstRowOnly: true,
+          },
+        });
+        const passes = passingExpression(w.quality);
+        if (passes)
+          activities.splice(1, 0, {
+            name: "VerifyQuality",
+            type: "IfCondition",
+            dependsOn: [
+              { activity: "CheckQuality", dependencyConditions: ["Succeeded"] },
+            ],
+            typeProperties: {
+              expression: expression(passes),
+              ifTrueActivities: [],
+              ifFalseActivities: [
+                {
+                  name: "RejectContractQuality",
+                  type: "Fail",
+                  typeProperties: {
+                    message: `Contract quality rules failed; nothing was copied. Error rules: ${w.quality
+                      .filter((q) => q.outcome === "fail")
+                      .map((q) => q.id)
+                      .join(", ")}. Counts are in the CheckQuality output.`,
+                    errorCode: "INGESTRON_QUALITY_FAILED",
+                  },
+                },
+              ],
+            },
+          });
+        copy.dependsOn = [
+          {
+            activity: passes ? "VerifyQuality" : "CheckQuality",
+            dependencyConditions: ["Succeeded"],
+          },
+        ];
+      }
       if (snapshot)
         activities.push({
           name: "VerifyCount",

@@ -14,12 +14,25 @@ connect to your data.
 With the Ingestron CLI, inside a project:
 
 ```sh
-ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.3.1
+ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.4.0
 ```
 
 Then select the provider in a flow and run `ingestron check` and `ingestron build`.
 See the [Ingestron documentation](https://docs.ingestron.io) for projects,
 contracts and plugins.
+
+## Contract quality rules
+
+For `snapshot-land@v1` and `snapshot-to-databricks@v1`, ODCS library rules in the
+contract (`nullValues`, `missingValues`, `invalidValues` with `validValues`,
+`duplicateValues`, `rowCount`) and the rules implied by primary keys become one
+native Lookup that counts each rule on the frozen source before Copy. An
+IfCondition fails the pipeline with `INGESTRON_QUALITY_FAILED` when an
+error-severity rule fails, so nothing is copied. Other results stay in the
+Lookup output. No Data Flow is generated, no rows are skipped, and pattern rules
+are rejected because SQL Server has no portable regular expressions. File copies
+and metadata-driven snapshots do not check contract rules. Requires Ingestron core
+0.12.11 or later.
 
 ## Guides
 
