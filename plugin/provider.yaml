@@ -1,6 +1,6 @@
 apiVersion: ingestron.provider/v1
 id: adf-native
-version: 4.3.1
+version: 4.4.0
 platform: adf
 compatibility:
   plan: ingestron.plan/v1
@@ -17,6 +17,24 @@ compatibility:
     - odcs-connections
     - connector-runtime-capabilities
     - project-assembly
+    - quality-capabilities
+quality:
+  library: {}
+  standards:
+    snapshot-land@v1:
+      library:
+        nullValues: at-load
+        missingValues: at-load
+        invalidValues: at-load
+        duplicateValues: at-load
+        rowCount: at-load
+    snapshot-to-databricks@v1:
+      library:
+        nullValues: at-load
+        missingValues: at-load
+        invalidValues: at-load
+        duplicateValues: at-load
+        rowCount: at-load
 configurationSchema: ./configuration.schema.json
 planner:
   apiVersion: ingestron.provider-planning/v1

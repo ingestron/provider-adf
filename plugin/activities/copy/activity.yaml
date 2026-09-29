@@ -36,6 +36,9 @@ optionsSchema:
       type: object
     allowEmpty:
       type: boolean
+    quality:
+      type: array
+      items: { type: object }
   additionalProperties: false
 generator:
   kind: native-pipeline
