@@ -14,7 +14,7 @@ connect to your data.
 With the Ingestron CLI, inside a project:
 
 ```sh
-ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.4.0
+ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.5.0
 ```
 
 Then select the provider in a flow and run `ingestron check` and `ingestron build`.
@@ -30,9 +30,15 @@ native Lookup that counts each rule on the frozen source before Copy. An
 IfCondition fails the pipeline with `INGESTRON_QUALITY_FAILED` when an
 error-severity rule fails, so nothing is copied. Other results stay in the
 Lookup output. No Data Flow is generated, no rows are skipped, and pattern rules
-are rejected because SQL Server has no portable regular expressions. File copies
-and metadata-driven snapshots do not check contract rules. Requires Ingestron core
-0.12.11 or later.
+are rejected because SQL Server has no portable regular expressions.
+
+`type: sql` rules join the same Lookup as T-SQL scalar subqueries on the source,
+with `${table}` as the source table and `${column}` as the rule's column; each
+query must return one number. Queries are checked offline for shape only (one
+read-only statement without comments); SQL Server compiles them when the Lookup
+runs. Engine (`custom`) rules, such as `engine: databricks`, are reported as not
+enforced. File copies and metadata-driven snapshots do not check contract rules.
+Requires Ingestron core 0.12.12 or later.
 
 ## Guides
 
