@@ -14,7 +14,7 @@ connect to your data.
 With the Ingestron CLI, inside a project:
 
 ```sh
-ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.3.0
+ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.3.1
 ```
 
 Then select the provider in a flow and run `ingestron check` and `ingestron build`.
