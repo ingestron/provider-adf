@@ -424,10 +424,40 @@ var OPERATORS = [
 var fail2 = (message) => {
   throw new Error(message);
 };
+function sqlShape(id, text) {
+  const stripped = String(text).replace(/N?'(?:[^']|'')*'/g, "''").replace(/\[[^\]]*\]/g, "[]").replace(/"[^"]*"/g, '""');
+  if (/--|\/\*|;/.test(stripped))
+    fail2(`${id}: query must be one statement without comments or semicolons`);
+  if (/\b(INSERT|UPDATE|DELETE|MERGE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|DENY|EXEC|EXECUTE|CALL|USE|SET|INTO|BACKUP|RESTORE|DBCC|OPENROWSET|OPENQUERY|OPENDATASOURCE|WAITFOR|SHUTDOWN|BULK)\b/i.test(
+    stripped
+  ))
+    fail2(`${id}: query must only read the source table`);
+  if (!/^\s*(SELECT|WITH)\b/i.test(stripped))
+    fail2(`${id}: a sql rule query must start with SELECT or WITH`);
+  return text;
+}
 function parse(rule, table, column) {
-  if (!rule || typeof rule !== "object" || (rule.type ?? "library") !== "library")
-    return void 0;
+  if (!rule || typeof rule !== "object") return void 0;
   const where = table + (column ? "." + column : "");
+  if (rule.type === "sql") {
+    const present2 = OPERATORS.filter((o) => rule[o] !== void 0);
+    if (present2.length !== 1)
+      fail2(`${where}: a sql rule needs exactly one comparison`);
+    return {
+      id: String(rule.id ?? `${where}.sql`),
+      table,
+      ...column ? { column } : {},
+      metric: "sql",
+      query: rule.query,
+      operator: present2[0],
+      threshold: rule[present2[0]],
+      arguments: {},
+      unit: "rows",
+      outcome: /^error$/i.test(String(rule.severity ?? "")) ? "fail" : "warn",
+      source: "contract"
+    };
+  }
+  if ((rule.type ?? "library") !== "library") return void 0;
   if (!METRICS.includes(rule.metric))
     fail2(`${where}: unsupported library metric ${rule.metric}`);
   const present = OPERATORS.filter((o) => rule[o] !== void 0);
@@ -526,6 +556,21 @@ function qualityRules(contract, columns) {
   const byName = new Map(columns.map((c) => [c.name, c]));
   const column = (rule, name) => byName.get(physical.get(name) ?? name) ?? fail2(`${rule.id}: unknown contract column ${name}`);
   return contractRules(contract).map((rule) => {
+    if (rule.metric === "sql") {
+      passing(rule);
+      return {
+        id: rule.id,
+        metric: "sql",
+        query: sqlShape(rule.id, rule.query).replaceAll(
+          "${column}",
+          rule.column ? quote(column(rule, rule.column).name) : "${column}"
+        ),
+        operator: rule.operator,
+        threshold: rule.threshold,
+        unit: "rows",
+        outcome: rule.outcome
+      };
+    }
     if (["nullValues", "missingValues", "invalidValues"].includes(rule.metric) && !rule.column)
       fail2(`${rule.id}: ${rule.metric} needs a column`);
     if (rule.metric === "invalidValues" && typeof rule.arguments.pattern === "string")
@@ -556,6 +601,8 @@ function qualityQuery(rules, columns, schema, table) {
   const types = new Map(columns.map((c) => [c.name, c.type]));
   const from = `${quote(schema)}.${quote(table)}`;
   const selected = rules.map((rule, i) => {
+    if (rule.metric === "sql")
+      return `(${rule.query.replaceAll("${table}", from)}) AS q${i}`;
     const target = rule.column ? { name: rule.column, type: types.get(rule.column) } : void 0;
     let value = measure(
       {
@@ -571,9 +618,9 @@ function qualityQuery(rules, columns, schema, table) {
     );
     if (rule.unit === "percent" && rule.metric !== "rowCount")
       value = `ISNULL(CAST(100.0 * (${value}) / NULLIF(COUNT_BIG(*), 0) AS DECIMAL(9, 4)), 0)`;
-    return `${value} AS q${i}`;
+    return `(SELECT ${value} FROM ${from}) AS q${i}`;
   });
-  return `SELECT ${selected.join(", ")} FROM ${from}`;
+  return `SELECT ${selected.join(", ")}`;
 }
 var passing = (c, value = "x") => {
   const t = c.threshold;

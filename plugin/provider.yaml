@@ -1,6 +1,6 @@
 apiVersion: ingestron.provider/v1
 id: adf-native
-version: 4.4.0
+version: 4.5.0
 platform: adf
 compatibility:
   plan: ingestron.plan/v1
@@ -28,6 +28,7 @@ quality:
         invalidValues: at-load
         duplicateValues: at-load
         rowCount: at-load
+      sql: at-load
     snapshot-to-databricks@v1:
       library:
         nullValues: at-load
@@ -35,6 +36,7 @@ quality:
         invalidValues: at-load
         duplicateValues: at-load
         rowCount: at-load
+      sql: at-load
 configurationSchema: ./configuration.schema.json
 planner:
   apiVersion: ingestron.provider-planning/v1

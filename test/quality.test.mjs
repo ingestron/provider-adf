@@ -130,14 +130,14 @@ test("SQL snapshots check contract rules on the frozen source before Copy", () =
   );
   const [lookup, verify, copy] = pipeline.activities;
   const query = lookup.typeProperties.source.sqlReaderQuery;
+  const from = "[dbo].[customers]";
   assert.equal(
     query,
-    "SELECT COUNT_BIG(*) AS q0, " +
-      "ISNULL(SUM(CASE WHEN [state] IS NOT NULL AND [state] NOT IN (N'NZ', N'O''Neil') THEN 1 ELSE 0 END), 0) AS q1, " +
-      "ISNULL(CAST(100.0 * (ISNULL(SUM(CASE WHEN [state] IS NULL OR [state] IN (N'') THEN 1 ELSE 0 END), 0)) / NULLIF(COUNT_BIG(*), 0) AS DECIMAL(9, 4)), 0) AS q2, " +
-      "ISNULL(SUM(CASE WHEN [id] IS NULL THEN 1 ELSE 0 END), 0) AS q3, " +
-      "COUNT_BIG(*) - (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT [id] FROM [dbo].[customers]) AS d) AS q4 " +
-      "FROM [dbo].[customers]",
+    `SELECT (SELECT COUNT_BIG(*) FROM ${from}) AS q0, ` +
+      `(SELECT ISNULL(SUM(CASE WHEN [state] IS NOT NULL AND [state] NOT IN (N'NZ', N'O''Neil') THEN 1 ELSE 0 END), 0) FROM ${from}) AS q1, ` +
+      `(SELECT ISNULL(CAST(100.0 * (ISNULL(SUM(CASE WHEN [state] IS NULL OR [state] IN (N'') THEN 1 ELSE 0 END), 0)) / NULLIF(COUNT_BIG(*), 0) AS DECIMAL(9, 4)), 0) FROM ${from}) AS q2, ` +
+      `(SELECT ISNULL(SUM(CASE WHEN [id] IS NULL THEN 1 ELSE 0 END), 0) FROM ${from}) AS q3, ` +
+      `(SELECT COUNT_BIG(*) - (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT [id] FROM ${from}) AS d) FROM ${from}) AS q4`,
   );
   assert.equal(lookup.typeProperties.firstRowOnly, true);
   assert.equal(lookup.policy.retry, 0);
@@ -199,4 +199,72 @@ test("forms T-SQL cannot check and non-SQL standards are handled explicitly", ()
     standard: "immutable-file-copy@v1",
   });
   assert.throws(() => validate(p), /SQL snapshot standards only/);
+});
+
+test("sql rules join the pre-copy check; engine rules are left to their engine", () => {
+  const w = planned(
+    "snapshot-land@v1",
+    contract(
+      {
+        quality: [
+          {
+            id: "recent",
+            type: "sql",
+            query: "SELECT COUNT(*) FROM ${table} WHERE [id] < 0",
+            mustBe: 0,
+            severity: "error",
+          },
+          {
+            id: "dbx-only",
+            type: "custom",
+            engine: "databricks",
+            implementation: "id > 0",
+            severity: "error",
+          },
+        ],
+      },
+      [
+        {
+          id: "state-width",
+          type: "sql",
+          query: "SELECT MAX(LEN(${column})) FROM ${table}",
+          mustBeLessOrEqualTo: 3,
+        },
+      ],
+    ),
+  );
+  assert.deepEqual(
+    w.quality.map((q) => q.id),
+    [
+      "recent",
+      "state-width",
+      "customers.id.key-not-null",
+      "customers.key-unique",
+    ],
+  );
+  const pipeline = render(plan(w))["pipelines/retail_source_customers.json"]
+    .value.properties;
+  const query = pipeline.activities[0].typeProperties.source.sqlReaderQuery;
+  assert.match(
+    query,
+    /^SELECT \(SELECT COUNT\(\*\) FROM \[dbo\]\.\[customers\] WHERE \[id\] < 0\) AS q0, \(SELECT MAX\(LEN\(\[state\]\)\) FROM \[dbo\]\.\[customers\]\) AS q1, /,
+  );
+  assert.match(
+    pipeline.activities[1].typeProperties.expression.value,
+    /^@and\(equals\(activity\('CheckQuality'\)\.output\.firstRow\.q0, 0\), /,
+  );
+  for (const [query, message] of [
+    ["SELECT 1; DROP TABLE x", /semicolons/],
+    ["SELECT * INTO copy FROM ${table}", /only read/],
+    ["EXEC sp_who", /only read/],
+    ["SELECT 1 /* x */", /comments/],
+  ])
+    assert.throws(
+      () =>
+        planned(
+          "snapshot-land@v1",
+          contract({ quality: [{ type: "sql", query, mustBe: 0 }] }),
+        ),
+      message,
+    );
 });
