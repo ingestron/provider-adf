@@ -19,9 +19,9 @@ needed to compile.
 Copy this example to a fresh working directory and run there:
 
 ```sh
-ingestron --no-input provider install ingestron/provider-adf/plugin/provider.yaml@4.2.0
+ingestron --no-input provider install ingestron/provider-adf/plugin/provider.yaml@4.3.0
 ingestron --no-input provider install ingestron/provider-databricks/plugin/provider.yaml@3.2.0
-ingestron --no-input plugin install ingestron/provider-adf/packs/sql-snapshot/pack.yaml@4.2.0
+ingestron --no-input plugin install ingestron/provider-adf/packs/sql-snapshot/pack.yaml@4.3.0
 ingestron --no-input plugin check --delivery
 ingestron --no-input build --delivery --out out
 ```

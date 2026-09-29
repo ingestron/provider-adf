@@ -2,7 +2,7 @@
 
 For Azure data engineers reviewing a source before designing ingestion. This example
 turns scoped database catalogue metadata into draft ODCS contracts.
-Install this provider with `ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.2.0`. Start with the offline fixtures (about 10 minutes);
+Install this provider with `ingestron provider install ingestron/provider-adf/plugin/provider.yaml@4.3.0`. Start with the offline fixtures (about 10 minutes);
 live setup needs an authorised Azure subscription and typically 30–60 minutes plus
 resource/identity propagation.
 
