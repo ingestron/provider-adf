@@ -22,6 +22,8 @@ compatibility:
 sources:
   sql-server:
     route: native
+    discovery:
+      command: discover route
     standards:
       - snapshot-land@v1
       - snapshot-to-databricks@v1
@@ -72,6 +74,8 @@ sources:
       consistency: frozen-extract
   postgresql:
     route: native
+    discovery:
+      command: discover route
     standards:
       - snapshot-land@v1
       - snapshot-to-databricks@v1
@@ -114,6 +118,8 @@ sources:
       consistency: frozen-extract
   mysql:
     route: native
+    discovery:
+      command: discover route
     standards:
       - snapshot-land@v1
       - snapshot-to-databricks@v1
@@ -156,6 +162,8 @@ sources:
       consistency: frozen-extract
   oracle:
     route: native
+    discovery:
+      command: discover route
     standards:
       - snapshot-land@v1
       - snapshot-to-databricks@v1
@@ -626,6 +634,36 @@ commands:
         properties:
           artifact:
             type: object
+    - name: discover route
+      description:
+        Generate the metadata pipeline for a native connection flow whose
+        source is not reachable locally; no Azure calls.
+      inputSchema:
+        type: object
+        additionalProperties: false
+        required:
+          - flow
+          - kind
+          - source
+          - tables
+          - binding
+        properties:
+          flow:
+            type: string
+            minLength: 1
+            maxLength: 100
+          kind:
+            type: string
+            minLength: 1
+            maxLength: 50
+          source:
+            type: object
+          tables:
+            type: object
+          target:
+            type: object
+          binding:
+            type: object
     - name: connection prepare
       description: Prepare a project-resolved connection, selected fields and
         runtime-only secrets
@@ -833,6 +871,8 @@ commands:
               - azure-sql
               - sql-server
               - postgresql
+              - mysql
+              - oracle
           sourceLinkedService:
             type: string
             minLength: 1
@@ -882,6 +922,8 @@ commands:
                   - azure-sql
                   - sql-server
                   - postgresql
+                  - mysql
+                  - oracle
               acceptDeclaredKeys:
                 type: boolean
               rows:
@@ -1014,6 +1056,8 @@ commands:
               - azure-sql
               - sql-server
               - postgresql
+              - mysql
+              - oracle
           sourceLinkedService:
             type: string
             minLength: 1

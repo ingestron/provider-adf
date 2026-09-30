@@ -3,7 +3,11 @@ import { projectConnectionPrepare } from "./project-connections.mjs";
 import { connectorContracts } from "./connectors.mjs";
 import { computePrepare, poolPrepare } from "./compute.mjs";
 import { sourcePrepare, fileContracts } from "./source-discovery.mjs";
-import { discoveryPrepare, discoveryContracts } from "./discovery.mjs";
+import {
+  discoveryPrepare,
+  discoveryContracts,
+  discoveryRoute,
+} from "./discovery.mjs";
 const require = (condition, message) => {
   if (!condition) throw new Error(message);
 };
@@ -92,6 +96,8 @@ export function command(request) {
     request.command === "deploy prepare"
   )
     return discoveryPrepare(request.input);
+  if (request.command === "discover route")
+    return discoveryRoute(request.input);
   if (request.command === "discover source prepare")
     return sourcePrepare(request.input);
   if (request.command === "discover contracts")
