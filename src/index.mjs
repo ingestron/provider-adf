@@ -336,10 +336,16 @@ export function validate(plan) {
           "bucket",
           "folder",
           "fileName",
+          "path",
           "completion",
           "format",
         ],
         "file source",
+      );
+      check(
+        s.path === undefined ||
+          (s.folder === undefined && s.fileName === undefined),
+        "Name the file with path, or with folder and fileName, not both",
       );
       check(
         ["adls", "s3", "gcs", "sftp"].includes(s.kind) &&
@@ -353,12 +359,14 @@ export function validate(plan) {
           ),
         "Unsupported source file format",
       );
+      const { folder, fileName } = fileLocation(s);
       check(
         s.completion === "immutable" &&
-          path(s.folder) &&
-          path(s.fileName) &&
-          !s.fileName.includes("/"),
-        "Specify one completed immutable file; wildcards and mutable files are unsupported",
+          (folder === undefined || path(folder)) &&
+          path(fileName) &&
+          !fileName.includes("/") &&
+          (s.path === undefined || /\.[A-Za-z0-9]+$/.test(fileName)),
+        "Specify one completed immutable file (a path ends with the file name); folders, wildcards and mutable files are unsupported on ADF",
       );
       check(
         s.kind === "adls"
@@ -389,6 +397,14 @@ export function validate(plan) {
   );
 }
 const expression = (value) => ({ type: "Expression", value });
+/** A file named by the portable path (shared with connectors and Databricks), or by folder and fileName. */
+const fileLocation = (s) => {
+  if (s.path === undefined) return { folder: s.folder, fileName: s.fileName };
+  const cut = String(s.path).lastIndexOf("/");
+  return cut < 0
+    ? { folder: undefined, fileName: s.path }
+    : { folder: s.path.slice(0, cut), fileName: s.path.slice(cut + 1) };
+};
 /** A list named directly, or by the portable path Lists/<name>. */
 const sharePointList = (s) =>
   s.listName ??
@@ -446,9 +462,14 @@ export function render(plan) {
       const name = `${plan.project}_${n.flow}_${n.table}`,
         src = `${name}_source`,
         sink = `${name}_landing`;
+      const { folder, fileName } = fileLocation(s);
       const sourceLocation =
         s.kind === "sftp"
-          ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName }
+          ? {
+              type: "SftpLocation",
+              ...(folder ? { folderPath: folder } : {}),
+              fileName,
+            }
           : s.kind === "s3" || s.kind === "gcs"
             ? {
                 type:
@@ -456,14 +477,14 @@ export function render(plan) {
                     ? "AmazonS3Location"
                     : "GoogleCloudStorageLocation",
                 bucketName: s.bucket,
-                folderPath: s.folder,
-                fileName: s.fileName,
+                ...(folder ? { folderPath: folder } : {}),
+                fileName,
               }
             : {
                 type: "AzureBlobFSLocation",
                 fileSystem: s.fileSystem,
-                folderPath: s.folder,
-                fileName: s.fileName,
+                ...(folder ? { folderPath: folder } : {}),
+                fileName,
               };
       const sql = snapshot ? sqlSources[s.kind] : undefined;
       add("datasets", src, {
@@ -500,7 +521,7 @@ export function render(plan) {
             folderPath: expression(
               `@concat('${t.path}/${n.flow}/${n.table}/', dataset().runId)`,
             ),
-            ...(!tabular ? { fileName: s.fileName } : {}),
+            ...(!tabular ? { fileName: fileLocation(s).fileName } : {}),
           },
           ...(tabular ? { compressionCodec: "snappy" } : {}),
         },
