@@ -1,0 +1,126 @@
+apiVersion: ingestron.project/v1
+id: retail
+packages:
+  adf: ingestron/provider-adf/plugin/provider.yaml@4.7.0
+  databricks: ingestron/provider-databricks/plugin/provider.yaml@3.7.0
+providers:
+  configurations:
+    landing: { package: adf, binding: factory }
+    publisher:
+      package: databricks
+      binding: engine
+      options:
+        publication:
+          workspaceRoot: /Workspace/Shared/retail_publication/{{env}}
+          existingClusterId: 0123-exampledev
+          runAsServicePrincipal: retail-publisher-dev
+          permissions:
+            - { group_name: data-engineers, level: CAN_MANAGE_RUN }
+    processing:
+      package: databricks
+      binding: engine
+      options:
+        deployment:
+          {
+            mode: development,
+            rootPath: "/Workspace/Shared/retail_processing/{{env}}",
+          }
+defaults: { provider: processing }
+environments:
+  dev:
+    apiVersion: ingestron.environment/v1
+    environment: dev
+    bindings:
+      factory: { kind: adf, factoryName: adf-retail-dev }
+      engine:
+        { kind: databricks, host: https://example.invalid, catalog: retail_dev }
+      files: { kind: adls, accountName: retailsampledev }
+      erp_adf: { linkedService: source_sql, variant: sql-server }
+connections:
+  erp:
+    kind: sql-server
+    route: bridge
+    binding: erp_adf
+    sourceId: erp
+    tenantId: training
+    bridge:
+      provider: landing
+      publisher: publisher
+      landing:
+        { linkedService: landing_adls, fileSystem: landing, path: retail }
+      handover: files
+      publication:
+        credential:
+          {
+            secretScope: retail_storage_dev,
+            tenantIdKey: tenant-id,
+            clientIdKey: client-id,
+            clientSecretKey: client-secret,
+          }
+        maximumDropPercent: 50
+flows:
+  - apiVersion: ingestron.flow/v1
+    kind: ingestion
+    id: sales
+    provider: processing
+    ingestion:
+      connection: erp
+      standard: snapshot-with-history@v1
+      pipeline: sales
+      target: { schema: current, historySchema: history }
+      source:
+        {
+          delivery: complete-snapshot,
+          scope: full-table,
+          deletes: missing-keys,
+        }
+      retention: { sourceDeliveries: externally-retained, period: P90D }
+    tables:
+      customers:
+        source: { schema: dbo, table: customers }
+        contract: &c
+          apiVersion: v3.1.0
+          kind: DataContract
+          id: customers
+          name: customers
+          version: 1.0.0
+          status: draft
+          schema:
+            - name: customers
+              logicalType: object
+              physicalType: table
+              properties:
+                - {
+                    name: id,
+                    logicalType: integer,
+                    physicalType: BIGINT,
+                    required: true,
+                    primaryKey: true,
+                  }
+                - { name: name, logicalType: string, physicalType: STRING }
+      orders:
+        source: { schema: dbo, table: orders }
+        contract:
+          apiVersion: v3.1.0
+          kind: DataContract
+          id: orders
+          name: orders
+          version: 1.0.0
+          status: draft
+          schema:
+            - name: orders
+              logicalType: object
+              physicalType: table
+              properties:
+                - {
+                    name: id,
+                    logicalType: integer,
+                    physicalType: BIGINT,
+                    required: true,
+                    primaryKey: true,
+                  }
+                - {
+                    name: amount,
+                    logicalType: number,
+                    physicalType: "DECIMAL(10,2)",
+                  }
