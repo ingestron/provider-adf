@@ -31,6 +31,7 @@ export function sqlShape(id, text) {
   const stripped = String(text)
     .replace(/N?'(?:[^']|'')*'/g, "''")
     .replace(/\[[^\]]*\]/g, "[]")
+    .replace(/`[^`]*`/g, "``")
     .replace(/"[^"]*"/g, '""');
   if (/--|\/\*|;/.test(stripped))
     fail(`${id}: query must be one statement without comments or semicolons`);
@@ -132,14 +133,53 @@ export function contractRules(contract) {
   return rules;
 }
 
-const quote = (name) => "[" + name.replaceAll("]", "]]") + "]";
+/** SQL dialects of the sources ADF snapshots read (PB-064). */
+export const dialects = {
+  tsql: {
+    quote: (n) => "[" + n.replaceAll("]", "]]") + "]",
+    count: "COUNT_BIG",
+    ifNull: "ISNULL",
+    text: (v) => `N'${v.replaceAll("'", "''")}'`,
+    alias: " AS d",
+    dual: "",
+    regex: undefined,
+  },
+  postgres: {
+    quote: (n) => `"${n.replaceAll('"', '""')}"`,
+    count: "COUNT",
+    ifNull: "COALESCE",
+    text: (v) => `'${v.replaceAll("'", "''")}'`,
+    alias: " AS d",
+    dual: "",
+    regex: (c, p) => `CAST(${c} AS TEXT) !~ ${p}`,
+  },
+  mysql: {
+    quote: (n) => "`" + n.replaceAll("`", "``") + "`",
+    count: "COUNT",
+    ifNull: "COALESCE",
+    text: (v) => `'${v.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`,
+    alias: " AS d",
+    dual: "",
+    regex: (c, p) => `NOT REGEXP_LIKE(${c}, ${p})`,
+  },
+  oracle: {
+    quote: (n) => `"${n.replaceAll('"', '""')}"`,
+    count: "COUNT",
+    ifNull: "COALESCE",
+    text: (v) => `'${v.replaceAll("'", "''")}'`,
+    // Oracle rejects AS before a table alias and needs a FROM clause.
+    alias: " d",
+    dual: " FROM DUAL",
+    regex: (c, p) => `NOT REGEXP_LIKE(${c}, ${p})`,
+  },
+};
 const numeric = (type) =>
   /^(BIGINT|INT|INTEGER|SMALLINT|DOUBLE|FLOAT|DECIMAL)/.test(type);
 /** Listed values that cannot take the column type never match a row. */
-function literals(values, type) {
+function literals(values, type, d) {
   return (Array.isArray(values) ? values : []).flatMap((v) =>
     type === "STRING" && typeof v === "string"
-      ? [`N'${v.replaceAll("'", "''")}'`]
+      ? [d.text(v)]
       : numeric(type) && typeof v === "number" && Number.isFinite(v)
         ? [String(v)]
         : type === "BOOLEAN" && typeof v === "boolean"
@@ -148,30 +188,39 @@ function literals(values, type) {
   );
 }
 
-function measure(rule, column, properties, from) {
+function measure(rule, column, properties, from, d) {
   const sum = (condition) =>
-    `ISNULL(SUM(CASE WHEN ${condition} THEN 1 ELSE 0 END), 0)`;
-  if (rule.metric === "rowCount") return "COUNT_BIG(*)";
+    `${d.ifNull}(SUM(CASE WHEN ${condition} THEN 1 ELSE 0 END), 0)`;
+  if (rule.metric === "rowCount") return `${d.count}(*)`;
   if (rule.metric === "duplicateValues") {
-    if (column) return `COUNT_BIG(${column}) - COUNT_BIG(DISTINCT ${column})`;
-    return `COUNT_BIG(*) - (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT ${properties.join(", ")} FROM ${from}) AS d)`;
+    if (column) return `${d.count}(${column}) - ${d.count}(DISTINCT ${column})`;
+    return `${d.count}(*) - (SELECT ${d.count}(*) FROM (SELECT DISTINCT ${properties.join(", ")} FROM ${from})${d.alias})`;
   }
   const { name, type } = column;
-  const c = quote(name);
+  const c = d.quote(name);
   if (rule.metric === "nullValues") return sum(`${c} IS NULL`);
   if (rule.metric === "missingValues") {
-    const missing = literals(rule.arguments.missingValues ?? [null, ""], type);
+    const missing = literals(
+      rule.arguments.missingValues ?? [null, ""],
+      type,
+      d,
+    );
     return sum(
       missing.length
         ? `${c} IS NULL OR ${c} IN (${missing.join(", ")})`
         : `${c} IS NULL`,
     );
   }
-  if (typeof rule.arguments.pattern === "string")
-    fail(
-      `${rule.id}: SQL Server has no portable regular expressions; use arguments.validValues or a Databricks standard`,
+  if (typeof rule.arguments.pattern === "string") {
+    if (!d.regex)
+      fail(
+        `${rule.id}: SQL Server has no portable regular expressions; use arguments.validValues or a Databricks standard`,
+      );
+    return sum(
+      `${c} IS NOT NULL AND ${d.regex(c, d.text(`^(${rule.arguments.pattern})$`).replace(/^N/, ""))}`,
     );
-  const valid = literals(rule.arguments.validValues, type);
+  }
+  const valid = literals(rule.arguments.validValues, type, d);
   return sum(
     valid.length
       ? `${c} IS NOT NULL AND ${c} NOT IN (${valid.join(", ")})`
@@ -195,10 +244,8 @@ export function qualityRules(contract, columns) {
       return {
         id: rule.id,
         metric: "sql",
-        query: sqlShape(rule.id, rule.query).replaceAll(
-          "${column}",
-          rule.column ? quote(column(rule, rule.column).name) : "${column}",
-        ),
+        query: sqlShape(rule.id, rule.query),
+        ...(rule.column ? { column: column(rule, rule.column).name } : {}),
         operator: rule.operator,
         threshold: rule.threshold,
         unit: "rows",
@@ -210,13 +257,6 @@ export function qualityRules(contract, columns) {
       !rule.column
     )
       fail(`${rule.id}: ${rule.metric} needs a column`);
-    if (
-      rule.metric === "invalidValues" &&
-      typeof rule.arguments.pattern === "string"
-    )
-      fail(
-        `${rule.id}: SQL Server has no portable regular expressions; use arguments.validValues or a Databricks standard`,
-      );
     const properties = (rule.arguments.properties ?? []).map(
       (p) => column(rule, p).name,
     );
@@ -234,6 +274,9 @@ export function qualityRules(contract, columns) {
       ...(rule.arguments.missingValues !== undefined
         ? { missingValues: rule.arguments.missingValues }
         : {}),
+      ...(typeof rule.arguments.pattern === "string"
+        ? { pattern: rule.arguments.pattern }
+        : {}),
       operator: rule.operator,
       threshold: rule.threshold,
       unit: rule.unit,
@@ -243,12 +286,18 @@ export function qualityRules(contract, columns) {
 }
 
 /** One row of scalar subqueries over the frozen source; aliases q0, q1… follow rule order. */
-export function qualityQuery(rules, columns, schema, table) {
+export function qualityQuery(rules, columns, schema, table, dialect = "tsql") {
+  const d = dialects[dialect] ?? fail(`Unsupported SQL dialect ${dialect}`);
   const types = new Map(columns.map((c) => [c.name, c.type]));
-  const from = `${quote(schema)}.${quote(table)}`;
+  const from = `${d.quote(schema)}.${d.quote(table)}`;
   const selected = rules.map((rule, i) => {
     if (rule.metric === "sql")
-      return `(${rule.query.replaceAll("${table}", from)}) AS q${i}`;
+      return `(${rule.query
+        .replaceAll("${table}", from)
+        .replaceAll(
+          "${column}",
+          rule.column ? d.quote(rule.column) : "${column}",
+        )}) AS q${i}`;
     const target = rule.column
       ? { name: rule.column, type: types.get(rule.column) }
       : undefined;
@@ -258,17 +307,21 @@ export function qualityQuery(rules, columns, schema, table) {
         arguments: {
           validValues: rule.validValues,
           missingValues: rule.missingValues,
+          pattern: rule.pattern,
         },
       },
-      rule.metric === "duplicateValues" && target ? quote(target.name) : target,
-      (rule.properties ?? []).map(quote),
+      rule.metric === "duplicateValues" && target
+        ? d.quote(target.name)
+        : target,
+      (rule.properties ?? []).map(d.quote),
       from,
+      d,
     );
     if (rule.unit === "percent" && rule.metric !== "rowCount")
-      value = `ISNULL(CAST(100.0 * (${value}) / NULLIF(COUNT_BIG(*), 0) AS DECIMAL(9, 4)), 0)`;
+      value = `${d.ifNull}(CAST(100.0 * (${value}) / NULLIF(${d.count}(*), 0) AS DECIMAL(9, 4)), 0)`;
     return `(SELECT ${value} FROM ${from}) AS q${i}`;
   });
-  return `SELECT ${selected.join(", ")}`;
+  return `SELECT ${selected.join(", ")}${d.dual}`;
 }
 
 const passing = (c, value = "x") => {

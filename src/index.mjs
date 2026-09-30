@@ -5,6 +5,7 @@ import {
   renderMetadata,
 } from "./metadata.mjs";
 import { validatePublication, publicationPipeline } from "./publication.mjs";
+import { sqlSources, sqlKinds, selectQuery } from "./sql-sources.mjs";
 import { qualityRules, qualityQuery, passingExpression } from "./quality.mjs";
 const check = (ok, message) => {
   if (!ok) throw new Error(message);
@@ -45,7 +46,7 @@ export const standards = [
   },
   {
     id: "snapshot-to-databricks@v1",
-    sources: ["azure-sql", "sql-server"],
+    sources: sqlKinds,
     dataFlow: "forbidden",
     consistency: "frozen-extract",
     delivery:
@@ -53,14 +54,14 @@ export const standards = [
   },
   {
     id: "snapshot-land@v1",
-    sources: ["azure-sql", "sql-server"],
+    sources: sqlKinds,
     dataFlow: "forbidden",
     consistency: "frozen-extract",
     delivery: "isolated snapshot files; downstream publication required",
   },
   {
     id: "immutable-file-copy@v1",
-    sources: ["adls", "sftp"],
+    sources: ["adls", "s3", "sftp"],
     dataFlow: "forbidden",
     consistency: "completed immutable file",
     delivery: "one preserved binary file per run",
@@ -232,8 +233,17 @@ export function validate(plan) {
         "SQL source",
       );
       check(
-        ["azure-sql", "sql-server"].includes(s.kind),
-        "Snapshots support Azure SQL and SQL Server only",
+        w.standard === metadataStandard
+          ? ["azure-sql", "sql-server"].includes(s.kind)
+          : sqlKinds.includes(s.kind),
+        w.standard === metadataStandard
+          ? "Metadata snapshots support Azure SQL and SQL Server only"
+          : `Snapshots support ${sqlKinds.join(", ")}`,
+      );
+      check(
+        !w.quality?.some((q) => q.pattern !== undefined) ||
+          sqlSources[s.kind].dialect !== "tsql",
+        "Pattern quality rules need a source with regular expressions; SQL Server has none that are portable. Use arguments.validValues or another source",
       );
       check(
         s.consistency === "frozen-extract",
@@ -262,6 +272,7 @@ export function validate(plan) {
           "kind",
           "linkedService",
           "fileSystem",
+          "bucket",
           "folder",
           "fileName",
           "completion",
@@ -270,8 +281,8 @@ export function validate(plan) {
         "file source",
       );
       check(
-        ["adls", "sftp"].includes(s.kind) && resource(s.linkedService),
-        "Files support ADLS and SFTP only",
+        ["adls", "s3", "sftp"].includes(s.kind) && resource(s.linkedService),
+        "Files support ADLS, S3 and SFTP only",
       );
       check(
         s.format === undefined ||
@@ -292,6 +303,12 @@ export function validate(plan) {
           ? /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(s.fileSystem)
           : s.fileSystem === undefined,
         "fileSystem applies to ADLS only",
+      );
+      check(
+        s.kind === "s3"
+          ? /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(s.bucket)
+          : s.bucket === undefined,
+        "bucket applies to S3 only and must be a valid bucket name",
       );
       check(w.allowEmpty === undefined, "allowEmpty applies to snapshots only");
     }
@@ -360,25 +377,27 @@ export function render(plan) {
       const sourceLocation =
         s.kind === "sftp"
           ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName }
-          : {
-              type: "AzureBlobFSLocation",
-              fileSystem: s.fileSystem,
-              folderPath: s.folder,
-              fileName: s.fileName,
-            };
+          : s.kind === "s3"
+            ? {
+                type: "AmazonS3Location",
+                bucketName: s.bucket,
+                folderPath: s.folder,
+                fileName: s.fileName,
+              }
+            : {
+                type: "AzureBlobFSLocation",
+                fileSystem: s.fileSystem,
+                folderPath: s.folder,
+                fileName: s.fileName,
+              };
+      const sql = snapshot ? sqlSources[s.kind] : undefined;
       add("datasets", src, {
-        type: snapshot
-          ? s.kind === "azure-sql"
-            ? "AzureSqlTable"
-            : "SqlServerTable"
-          : "Binary",
+        type: snapshot ? sql.dataset : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: s.linkedService,
         },
-        typeProperties: snapshot
-          ? { schema: s.schema, table: s.table }
-          : { location: sourceLocation },
+        typeProperties: snapshot ? sql.table(s) : { location: sourceLocation },
       });
       add("datasets", sink, {
         type: snapshot ? "Parquet" : "Binary",
@@ -412,9 +431,9 @@ export function render(plan) {
         typeProperties: {
           source: snapshot
             ? {
-                type: s.kind === "azure-sql" ? "AzureSqlSource" : "SqlSource",
-                sqlReaderQuery: `SELECT ${n.columns.map((c) => "[" + c.name + "]").join(", ")} FROM [${s.schema}].[${s.table}]`,
-                partitionOption: "None",
+                type: sql.source,
+                [sql.query]: selectQuery(s.kind, n.columns, s.schema, s.table),
+                ...sql.options,
               }
             : {
                 type: "BinarySource",
@@ -422,7 +441,9 @@ export function render(plan) {
                   type:
                     s.kind === "sftp"
                       ? "SftpReadSettings"
-                      : "AzureBlobFSReadSettings",
+                      : s.kind === "s3"
+                        ? "AmazonS3ReadSettings"
+                        : "AzureBlobFSReadSettings",
                   recursive: false,
                 },
               },
@@ -470,14 +491,15 @@ export function render(plan) {
           policy,
           typeProperties: {
             source: {
-              type: s.kind === "azure-sql" ? "AzureSqlSource" : "SqlSource",
-              sqlReaderQuery: qualityQuery(
+              type: sql.source,
+              [sql.query]: qualityQuery(
                 w.quality,
                 n.columns,
                 s.schema,
                 s.table,
+                sql.dialect,
               ),
-              partitionOption: "None",
+              ...sql.options,
             },
             dataset: { type: "DatasetReference", referenceName: src },
             firstRowOnly: true,

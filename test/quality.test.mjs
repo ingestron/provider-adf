@@ -176,20 +176,17 @@ test("warning-only rules record counts without a gate", () => {
 });
 
 test("forms T-SQL cannot check and non-SQL standards are handled explicitly", () => {
-  assert.throws(
-    () =>
-      planned(
-        "snapshot-land@v1",
-        contract({}, [
-          {
-            metric: "invalidValues",
-            arguments: { pattern: "[A-Z]{2}" },
-            mustBe: 0,
-          },
-        ]),
-      ),
-    /regular expressions/,
+  const patterned = planned(
+    "snapshot-land@v1",
+    contract({}, [
+      {
+        metric: "invalidValues",
+        arguments: { pattern: "[A-Z]{2}" },
+        mustBe: 0,
+      },
+    ]),
   );
+  assert.throws(() => validate(plan(patterned)), /regular expressions/);
   assert.equal(
     planned("immutable-file-copy@v1", contract()).quality,
     undefined,
@@ -267,4 +264,103 @@ test("sql rules join the pre-copy check; engine rules are left to their engine",
         ),
       message,
     );
+});
+
+test("postgresql, mysql and oracle snapshots use their own Copy types and SQL dialect", () => {
+  const rules = contract({}, [
+    {
+      id: "state-valid",
+      metric: "invalidValues",
+      arguments: { validValues: ["NZ"] },
+      mustBe: 0,
+      severity: "error",
+    },
+    {
+      id: "state-code",
+      metric: "invalidValues",
+      arguments: { pattern: "[A-Z]{2}" },
+      mustBe: 0,
+    },
+  ]);
+  const expected = {
+    postgresql: {
+      dataset: ["PostgreSqlV2Table", { schema: "dbo", table: "customers" }],
+      source: "PostgreSqlV2Source",
+      query: "query",
+      select: 'SELECT "id", "state" FROM "dbo"."customers"',
+      checks: [
+        /COUNT\(\*\)/,
+        /COALESCE\(SUM/,
+        /"state" NOT IN \('NZ'\)/,
+        /CAST\("state" AS TEXT\) !~ '\^\(\[A-Z\]\{2\}\)\$'/,
+      ],
+    },
+    mysql: {
+      dataset: ["MySqlTable", { tableName: "customers" }],
+      source: "MySqlSource",
+      query: "query",
+      select: "SELECT `id`, `state` FROM `dbo`.`customers`",
+      checks: [/NOT REGEXP_LIKE\(`state`/, /AS d\)/],
+    },
+    oracle: {
+      dataset: ["OracleTable", { schema: "dbo", table: "customers" }],
+      source: "OracleSource",
+      query: "oracleReaderQuery",
+      select: 'SELECT "id", "state" FROM "dbo"."customers"',
+      checks: [/ FROM DUAL$/, /\) d\)/, /NOT REGEXP_LIKE\("state"/],
+    },
+  };
+  for (const [kind, e] of Object.entries(expected)) {
+    const p = plan(planned("snapshot-land@v1", rules));
+    p.nodes[0].source.kind = kind;
+    validate(p);
+    const assets = render(p);
+    const dataset =
+      assets["datasets/retail_source_customers_source.json"].value.properties;
+    assert.deepEqual([dataset.type, dataset.typeProperties], e.dataset, kind);
+    const [lookup, , copy] =
+      assets["pipelines/retail_source_customers.json"].value.properties
+        .activities;
+    assert.equal(copy.typeProperties.source.type, e.source);
+    assert.equal(copy.typeProperties.source[e.query], e.select);
+    assert.equal(copy.typeProperties.source.partitionOption, undefined);
+    const check = lookup.typeProperties.source[e.query];
+    assert.doesNotMatch(check, /COUNT_BIG|ISNULL|N'/, kind);
+    for (const pattern of e.checks) assert.match(check, pattern, kind);
+  }
+});
+
+test("S3 files copy unchanged through the S3 location", () => {
+  const p = plan({
+    standard: "immutable-file-copy@v1",
+    target: { linkedService: "landing", fileSystem: "landing", path: "retail" },
+  });
+  p.nodes[0].source = {
+    kind: "s3",
+    linkedService: "vendor_s3",
+    bucket: "vendor-drops",
+    folder: "daily",
+    fileName: "orders.csv",
+    completion: "immutable",
+  };
+  validate(p);
+  const assets = render(p);
+  const location =
+    assets["datasets/retail_source_customers_source.json"].value.properties
+      .typeProperties.location;
+  assert.deepEqual(location, {
+    type: "AmazonS3Location",
+    bucketName: "vendor-drops",
+    folderPath: "daily",
+    fileName: "orders.csv",
+  });
+  const copy =
+    assets["pipelines/retail_source_customers.json"].value.properties
+      .activities[0];
+  assert.equal(
+    copy.typeProperties.source.storeSettings.type,
+    "AmazonS3ReadSettings",
+  );
+  p.nodes[0].source.bucket = "Bad_Bucket";
+  assert.throws(() => validate(p), /bucket/);
 });

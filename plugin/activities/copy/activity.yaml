@@ -46,5 +46,6 @@ generator:
 requirements:
   execution: adf-copy
   features: [existing-linked-services]
-  sourceKinds: [azure-sql, sql-server, adls, sftp]
+  sourceKinds:
+    [azure-sql, sql-server, postgresql, mysql, oracle, adls, s3, sftp]
   evidence: offline
