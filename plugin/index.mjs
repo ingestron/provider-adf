@@ -747,6 +747,50 @@ function selectQuery(kind, columns, schema, table) {
   return `SELECT ${columns.map((c) => quote(c.name)).join(", ")} FROM ${quote(schema)}.${quote(table)}`;
 }
 
+// src/app-sources.mjs
+var hubspotTables = {
+  calls: "CRM.Engagements.Calls",
+  companies: "CRM.Objects.Companies",
+  contacts: "CRM.Objects.Contacts",
+  deals: "CRM.Objects.Deals",
+  emails: "CRM.Engagements.Emails",
+  leads: "CRM.Objects.Leads",
+  line_items: "CRM.Objects.Line_Items",
+  marketing_campaigns: "Marketing.Campaigns",
+  marketing_emails: "Marketing.Emails.Marketing_Emails",
+  meetings: "CRM.Engagements.Meetings",
+  notes: "CRM.Engagements.Notes",
+  orders: "CRM.Commerce.Orders",
+  owners: "CRM.Owners",
+  products: "CRM.Objects.Products",
+  tasks: "CRM.Engagements.Tasks",
+  tickets: "CRM.Objects.Tickets"
+};
+var appSources = {
+  salesforce: {
+    label: "Salesforce",
+    dataset: "SalesforceV2Object",
+    valid: (object) => typeof object === "string" && /^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(object),
+    hint: "a Salesforce object API name such as Account or Invoice__c",
+    table: (s) => ({ objectApiName: s.object }),
+    // SOQL selects only the reviewed contract fields; deleted records are excluded.
+    source: (s, columns) => ({
+      type: "SalesforceV2Source",
+      query: `SELECT ${columns.map((c) => c.name).join(", ")} FROM ${s.object}`,
+      includeDeletedObjects: false
+    })
+  },
+  hubspot: {
+    label: "HubSpot",
+    dataset: "HubspotObject",
+    valid: (object) => Object.hasOwn(hubspotTables, object),
+    hint: `one of ${Object.keys(hubspotTables).join(", ")}`,
+    table: (s) => ({ tableName: hubspotTables[s.object] }),
+    // HubSpot 2.0 has no query; the reviewed column mapping selects fields.
+    source: () => ({ type: "HubspotSource" })
+  }
+};
+
 // src/index.mjs
 var check2 = (ok, message) => {
   if (!ok) throw new Error(message);
@@ -789,6 +833,13 @@ var standards = [
     dataFlow: "forbidden",
     consistency: "live list read; no point-in-time guarantee",
     delivery: "one Parquet snapshot of the list per run"
+  },
+  {
+    id: "app-land@v1",
+    sources: Object.keys(appSources),
+    dataFlow: "forbidden",
+    consistency: "live API read; no point-in-time guarantee",
+    delivery: "one Parquet snapshot of the object per run"
   },
   {
     id: "immutable-file-copy@v1",
@@ -936,7 +987,23 @@ function validate(plan) {
         w.publication === void 0 && t.storageAccount === void 0,
         "Publication settings require snapshot-to-databricks@v1"
       );
-    if (w.standard === "sharepoint-list-land@v1") {
+    if (w.standard === "app-land@v1") {
+      strict(s, ["kind", "linkedService", "object"], "application source");
+      const app = appSources[s.kind];
+      check2(
+        app && resource(s.linkedService),
+        `Application copies read ${Object.keys(appSources).join(", ")} through an existing linked service`
+      );
+      check2(app.valid(s.object), `${app.label} object must be ${app.hint}`);
+      check2(
+        n.columns.length > 0 && n.columns.every((c) => ident(c.name)),
+        "Explicit reviewed contract columns are required"
+      );
+      check2(
+        w.allowEmpty === void 0,
+        "allowEmpty applies to SQL snapshots only"
+      );
+    } else if (w.standard === "sharepoint-list-land@v1") {
       strict(
         s,
         ["kind", "linkedService", "listName", "path", "entity"],
@@ -1086,7 +1153,7 @@ function render(plan) {
         "snapshot-land@v1",
         "snapshot-to-databricks@v1",
         metadataStandard
-      ].includes(w.standard), list = w.standard === "sharepoint-list-land@v1", tabular = snapshot || list;
+      ].includes(w.standard), list = w.standard === "sharepoint-list-land@v1", app = w.standard === "app-land@v1" ? appSources[s.kind] : void 0, tabular = snapshot || list || app !== void 0;
       const name = `${plan.project}_${n.flow}_${n.table}`, src = `${name}_source`, sink = `${name}_landing`;
       const sourceLocation = s.kind === "sftp" ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName } : s.kind === "s3" || s.kind === "gcs" ? {
         type: s.kind === "s3" ? "AmazonS3Location" : "GoogleCloudStorageLocation",
@@ -1101,12 +1168,12 @@ function render(plan) {
       };
       const sql = snapshot ? sqlSources[s.kind] : void 0;
       add("datasets", src, {
-        type: snapshot ? sql.dataset : list ? "SharePointOnlineListResource" : "Binary",
+        type: snapshot ? sql.dataset : list ? "SharePointOnlineListResource" : app ? app.dataset : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: s.linkedService
         },
-        typeProperties: snapshot ? sql.table(s) : list ? { listName: sharePointList(s) } : { location: sourceLocation }
+        typeProperties: snapshot ? sql.table(s) : list ? { listName: sharePointList(s) } : app ? app.table(s) : { location: sourceLocation }
       });
       add("datasets", sink, {
         type: tabular ? "Parquet" : "Binary",
@@ -1145,7 +1212,7 @@ function render(plan) {
           } : list ? {
             type: "SharePointOnlineListSource",
             query: `$select=${n.columns.map((c) => c.name).join(",")}`
-          } : {
+          } : app ? app.source(s, n.columns) : {
             type: "BinarySource",
             storeSettings: {
               type: s.kind === "sftp" ? "SftpReadSettings" : s.kind === "s3" ? "AmazonS3ReadSettings" : s.kind === "gcs" ? "GoogleCloudStorageReadSettings" : "AzureBlobFSReadSettings",

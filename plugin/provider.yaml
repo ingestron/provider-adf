@@ -1,6 +1,6 @@
 apiVersion: ingestron.provider/v1
 id: adf-native
-version: 4.6.0
+version: 4.7.0
 platform: adf
 compatibility:
   plan: ingestron.plan/v1
@@ -427,6 +427,87 @@ sources:
       additionalProperties: false
     source:
       kind: sharepoint-list
+      linkedService: "{{binding.linkedService}}"
+  salesforce:
+    route: native
+    standards:
+      - app-land@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-salesforce
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/connector-salesforce
+        note:
+          A Salesforce V2 linked service (connected app with client credentials);
+          Salesforce Developer Edition is free
+      auth:
+        - oauth2-client-credentials
+      network:
+        - public
+      maturity: preview
+      verified: 2026-09-30
+      note: SOQL selects the reviewed contract fields; read live without a
+        point-in-time guarantee; Bulk API 2.0 limits apply
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: salesforce
+      linkedService: "{{binding.linkedService}}"
+  hubspot:
+    route: native
+    standards:
+      - app-land@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-hubspot
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/connector-hubspot
+        note: A HubSpot 2.0 linked service with OAuth app credentials
+      auth:
+        - oauth
+      network:
+        - public
+      maturity: preview
+      verified: 2026-09-30
+      note: Named HubSpot 2.0 tables (portable names such as contacts map to
+        CRM.Objects.Contacts); no query, so fields are selected by the reviewed
+        column mapping; read live
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: hubspot
       linkedService: "{{binding.linkedService}}"
 quality:
   library: {}

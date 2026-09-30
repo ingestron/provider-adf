@@ -438,3 +438,61 @@ test("SharePoint lists land as typed Parquet through the list connector", () => 
   };
   assert.throws(() => validate(p), /apostrophe/);
 });
+
+test("Salesforce and HubSpot objects land as typed Parquet through Copy", () => {
+  const p = plan({
+    standard: "app-land@v1",
+    target: { linkedService: "landing", fileSystem: "landing", path: "retail" },
+  });
+  const rendered = (source) => {
+    p.nodes[0].source = source;
+    validate(p);
+    const assets = render(p);
+    return {
+      dataset:
+        assets["datasets/retail_source_customers_source.json"].value.properties,
+      copy: assets["pipelines/retail_source_customers.json"].value.properties
+        .activities,
+    };
+  };
+  const sf = rendered({
+    kind: "salesforce",
+    linkedService: "crm_salesforce",
+    object: "Invoice__c",
+  });
+  assert.deepEqual(
+    [sf.dataset.type, sf.dataset.typeProperties],
+    ["SalesforceV2Object", { objectApiName: "Invoice__c" }],
+  );
+  assert.deepEqual(
+    sf.copy.map((a) => a.name),
+    ["Copy"],
+  );
+  assert.deepEqual(sf.copy[0].typeProperties.source, {
+    type: "SalesforceV2Source",
+    query: "SELECT id, state FROM Invoice__c",
+    includeDeletedObjects: false,
+  });
+  assert.equal(sf.copy[0].typeProperties.sink.type, "ParquetSink");
+  const hs = rendered({
+    kind: "hubspot",
+    linkedService: "crm_hubspot",
+    object: "contacts",
+  });
+  assert.deepEqual(
+    [hs.dataset.type, hs.dataset.typeProperties],
+    ["HubspotObject", { tableName: "CRM.Objects.Contacts" }],
+  );
+  assert.deepEqual(hs.copy[0].typeProperties.source, { type: "HubspotSource" });
+  assert.equal(hs.copy[0].typeProperties.translator.mappings.length, 2);
+  p.nodes[0].source = { kind: "hubspot", linkedService: "x", object: "forms" };
+  assert.throws(() => validate(p), /HubSpot object must be one of/);
+  p.nodes[0].source = {
+    kind: "salesforce",
+    linkedService: "x",
+    object: "Account WHERE",
+  };
+  assert.throws(() => validate(p), /Salesforce object API name/);
+  p.nodes[0].source = { kind: "jira", linkedService: "x", object: "issues" };
+  assert.throws(() => validate(p), /read salesforce, hubspot/);
+});
