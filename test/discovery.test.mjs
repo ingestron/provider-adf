@@ -191,3 +191,44 @@ for i,prefix in enumerate([b'\xef\xbb\xbf', b'']):
 `;
   execFileSync("python3", ["-c", script, join(dir, "deploy.py")]);
 });
+
+test("native connection flows get a metadata pipeline for their linked service", async () => {
+  const { discoveryRoute } = await import("../src/discovery.mjs");
+  const result = discoveryRoute({
+    flow: "sales_bridge",
+    kind: "oracle",
+    source: { kind: "oracle", linkedService: "erp_oracle" },
+    tables: {
+      customers: { schema: "SALES", table: "CUSTOMERS" },
+      orders: { schema: "SALES", table: "ORDERS" },
+    },
+    target: { linkedService: "landing_adls", fileSystem: "landing" },
+    binding: { kind: "adf", factoryName: "adf-retail-dev" },
+  });
+  const deployment = JSON.parse(result.artifacts["deployment.json"]);
+  assert.equal(deployment.sourceLinkedService, "erp_oracle");
+  assert.equal(deployment.mode, "existing-factory");
+  assert.match(result.artifacts["metadata-query.sql"], /all_tab_columns/);
+  assert.match(
+    result.artifacts["metadata-query.sql"],
+    /c\.table_name IN \('CUSTOMERS','ORDERS'\)/,
+  );
+  const template = JSON.parse(result.artifacts["template.json"]);
+  assert.equal(
+    template.resources.find((r) => r.name.endsWith("_source")).properties.type,
+    "OracleTable",
+  );
+  assert.match(result.next, /landing\/discovery\/sales_bridge/);
+  assert.throws(
+    () =>
+      discoveryRoute({
+        flow: "crm",
+        kind: "salesforce",
+        source: { kind: "salesforce", linkedService: "sf" },
+        tables: { a: { object: "Account" } },
+        target: { linkedService: "l", fileSystem: "landing" },
+        binding: { factoryName: "adf-crm-dev" },
+      }),
+    /use a portable connector/,
+  );
+});

@@ -9,6 +9,8 @@ export const sourceTypes = {
   "azure-sql": ["AzureSqlTable", "AzureSqlSource", "sqlReaderQuery"],
   "sql-server": ["SqlServerTable", "SqlSource", "sqlReaderQuery"],
   postgresql: ["PostgreSqlV2Table", "PostgreSqlV2Source", "query"],
+  mysql: ["MySqlTable", "MySqlSource", "query"],
+  oracle: ["OracleTable", "OracleSource", "oracleReaderQuery"],
 };
 export function metadataQuery(kind, schemas, tables = []) {
   require(Array.isArray(tables) &&
@@ -23,6 +25,30 @@ export function metadataQuery(kind, schemas, tables = []) {
     schemas.length <= 20 &&
     schemas.every(id), "Supply 1–20 explicit simple schema names");
   const scope = schemas.map((s) => `'${s}'`).join(",");
+  // Every dialect returns the same columns: schema_name, table_name,
+  // column_name, ordinal_position, data_type, numeric_precision/precision,
+  // numeric_scale/scale, max_length, nullable and primary_key.
+  if (kind === "mysql")
+    return `SELECT c.TABLE_SCHEMA AS schema_name, c.TABLE_NAME AS table_name, c.COLUMN_NAME AS column_name,
+ c.ORDINAL_POSITION AS ordinal_position, c.DATA_TYPE AS data_type, c.NUMERIC_PRECISION AS numeric_precision,
+ c.NUMERIC_SCALE AS numeric_scale, c.CHARACTER_MAXIMUM_LENGTH AS max_length,
+ (c.IS_NULLABLE = 'YES') AS nullable, (c.COLUMN_KEY = 'PRI') AS primary_key
+ FROM information_schema.COLUMNS c JOIN information_schema.TABLES t
+ ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME
+ WHERE t.TABLE_TYPE = 'BASE TABLE' AND c.TABLE_SCHEMA IN (${scope})${tables.length ? ` AND c.TABLE_NAME IN (${tableScope})` : ""}
+ ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`;
+  if (kind === "oracle")
+    return `SELECT c.owner AS schema_name, c.table_name AS table_name, c.column_name AS column_name,
+ c.column_id AS ordinal_position, c.data_type AS data_type, c.data_precision AS numeric_precision,
+ c.data_scale AS numeric_scale, c.data_length AS max_length,
+ CASE WHEN c.nullable = 'Y' THEN 1 ELSE 0 END AS nullable,
+ CASE WHEN EXISTS (SELECT 1 FROM all_constraints k JOIN all_cons_columns kc
+ ON kc.owner = k.owner AND kc.constraint_name = k.constraint_name
+ WHERE k.constraint_type = 'P' AND k.owner = c.owner AND k.table_name = c.table_name
+ AND kc.column_name = c.column_name) THEN 1 ELSE 0 END AS primary_key
+ FROM all_tab_columns c JOIN all_tables t ON t.owner = c.owner AND t.table_name = c.table_name
+ WHERE c.owner IN (${scope})${tables.length ? ` AND c.table_name IN (${tableScope})` : ""}
+ ORDER BY c.owner, c.table_name, c.column_id`;
   if (kind === "postgresql")
     return `SELECT c.table_schema AS schema_name, c.table_name, c.column_name,
  c.ordinal_position, c.udt_name AS data_type, c.numeric_precision AS precision,
@@ -468,3 +494,44 @@ export const discoveryDefinitions = [
     },
   },
 ];
+
+/** Discovery for a native connection flow (PB-064 phase 6): the metadata
+ * pipeline for the connection's linked service, exporting to the flow's
+ * landing storage. Core calls this when the source is not reachable from
+ * the machine running Ingestron. */
+export function discoveryRoute(input) {
+  const { flow, source, tables, target, binding } = input;
+  const kind = source?.kind;
+  require(Object.hasOwn(
+    sourceTypes,
+    kind,
+  ), "ADF metadata discovery covers SQL Server, Azure SQL, PostgreSQL, MySQL and Oracle; use a portable connector for other sources");
+  require(target &&
+    id(target.linkedService) &&
+    typeof target.fileSystem ===
+      "string", "Discovery exports to the flow's landing storage; set ingestion.target (or the bridge landing)");
+  const entries = Object.values(tables ?? {});
+  require(entries.length > 0 &&
+    entries.every(
+      (t) => id(t.schema) && typeof t.table === "string",
+    ), "Each table needs a source schema and table");
+  const useCase = String(flow)
+    .replace(/[^A-Za-z0-9_]/g, "_")
+    .slice(0, 32);
+  const prepared = discoveryPrepare({
+    useCase,
+    factoryName: binding?.factoryName,
+    location: "existing",
+    mode: "existing-factory",
+    sourceKind: kind,
+    sourceLinkedService: source.linkedService,
+    sinkLinkedService: target.linkedService,
+    fileSystem: target.fileSystem,
+    schemas: [...new Set(entries.map((t) => t.schema))],
+    tables: [...new Set(entries.map((t) => t.table))],
+  });
+  return {
+    ...prepared,
+    next: `Deploy template.json to factory ${binding?.factoryName} (deploy.py), trigger ingestron_${useCase}_discover once, then download ${target.fileSystem}/discovery/${useCase}/<run id>/metadata.json.`,
+  };
+}
