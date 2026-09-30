@@ -68,7 +68,7 @@ export const standards = [
   },
   {
     id: "immutable-file-copy@v1",
-    sources: ["adls", "s3", "sftp"],
+    sources: ["adls", "s3", "gcs", "sftp"],
     dataFlow: "forbidden",
     consistency: "completed immutable file",
     delivery: "one preserved binary file per run",
@@ -318,8 +318,9 @@ export function validate(plan) {
         "file source",
       );
       check(
-        ["adls", "s3", "sftp"].includes(s.kind) && resource(s.linkedService),
-        "Files support ADLS, S3 and SFTP only",
+        ["adls", "s3", "gcs", "sftp"].includes(s.kind) &&
+          resource(s.linkedService),
+        "Files support ADLS, S3, Google Cloud Storage and SFTP only",
       );
       check(
         s.format === undefined ||
@@ -342,10 +343,10 @@ export function validate(plan) {
         "fileSystem applies to ADLS only",
       );
       check(
-        s.kind === "s3"
-          ? /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(s.bucket)
+        ["s3", "gcs"].includes(s.kind)
+          ? /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/.test(s.bucket)
           : s.bucket === undefined,
-        "bucket applies to S3 only and must be a valid bucket name",
+        "bucket applies to S3 and Google Cloud Storage and must be a valid bucket name",
       );
       check(w.allowEmpty === undefined, "allowEmpty applies to snapshots only");
     }
@@ -423,9 +424,12 @@ export function render(plan) {
       const sourceLocation =
         s.kind === "sftp"
           ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName }
-          : s.kind === "s3"
+          : s.kind === "s3" || s.kind === "gcs"
             ? {
-                type: "AmazonS3Location",
+                type:
+                  s.kind === "s3"
+                    ? "AmazonS3Location"
+                    : "GoogleCloudStorageLocation",
                 bucketName: s.bucket,
                 folderPath: s.folder,
                 fileName: s.fileName,
@@ -502,7 +506,9 @@ export function render(plan) {
                         ? "SftpReadSettings"
                         : s.kind === "s3"
                           ? "AmazonS3ReadSettings"
-                          : "AzureBlobFSReadSettings",
+                          : s.kind === "gcs"
+                            ? "GoogleCloudStorageReadSettings"
+                            : "AzureBlobFSReadSettings",
                     recursive: false,
                   },
                 },

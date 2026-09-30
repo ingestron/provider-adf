@@ -363,6 +363,23 @@ test("S3 files copy unchanged through the S3 location", () => {
   );
   p.nodes[0].source.bucket = "Bad_Bucket";
   assert.throws(() => validate(p), /bucket/);
+  p.nodes[0].source = {
+    ...p.nodes[0].source,
+    kind: "gcs",
+    bucket: "vendor_drops",
+  };
+  validate(p);
+  const gcs = render(p);
+  assert.equal(
+    gcs["datasets/retail_source_customers_source.json"].value.properties
+      .typeProperties.location.type,
+    "GoogleCloudStorageLocation",
+  );
+  assert.equal(
+    gcs["pipelines/retail_source_customers.json"].value.properties.activities[0]
+      .typeProperties.source.storeSettings.type,
+    "GoogleCloudStorageReadSettings",
+  );
 });
 
 test("SharePoint lists land as typed Parquet through the list connector", () => {

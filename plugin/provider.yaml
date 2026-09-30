@@ -294,6 +294,55 @@ sources:
       linkedService: "{{binding.linkedService}}"
       bucket: "{{binding.bucket}}"
       completion: immutable
+  gcs:
+    route: native
+    standards:
+      - immutable-file-copy@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-google-cloud-storage
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/introduction
+        note: An existing data factory and linked services
+      auth:
+        - linked-service
+      network:
+        - public
+        - private-network
+        - on-premises
+      maturity: preview
+      verified: 2026-09-30
+      note:
+        Copies one completed file unchanged; it does not parse it into contract
+        columns
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+        - bucket
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+        bucket:
+          type: string
+          minLength: 3
+          maxLength: 63
+      additionalProperties: false
+    source:
+      kind: gcs
+      linkedService: "{{binding.linkedService}}"
+      bucket: "{{binding.bucket}}"
+      completion: immutable
   sftp:
     route: native
     standards:

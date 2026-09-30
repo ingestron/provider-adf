@@ -792,7 +792,7 @@ var standards = [
   },
   {
     id: "immutable-file-copy@v1",
-    sources: ["adls", "s3", "sftp"],
+    sources: ["adls", "s3", "gcs", "sftp"],
     dataFlow: "forbidden",
     consistency: "completed immutable file",
     delivery: "one preserved binary file per run"
@@ -1017,8 +1017,8 @@ function validate(plan) {
         "file source"
       );
       check2(
-        ["adls", "s3", "sftp"].includes(s.kind) && resource(s.linkedService),
-        "Files support ADLS, S3 and SFTP only"
+        ["adls", "s3", "gcs", "sftp"].includes(s.kind) && resource(s.linkedService),
+        "Files support ADLS, S3, Google Cloud Storage and SFTP only"
       );
       check2(
         s.format === void 0 || ["csv", "tsv", "json", "jsonl", "parquet", "xml", "xlsx"].includes(
@@ -1035,8 +1035,8 @@ function validate(plan) {
         "fileSystem applies to ADLS only"
       );
       check2(
-        s.kind === "s3" ? /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(s.bucket) : s.bucket === void 0,
-        "bucket applies to S3 only and must be a valid bucket name"
+        ["s3", "gcs"].includes(s.kind) ? /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/.test(s.bucket) : s.bucket === void 0,
+        "bucket applies to S3 and Google Cloud Storage and must be a valid bucket name"
       );
       check2(w.allowEmpty === void 0, "allowEmpty applies to snapshots only");
     }
@@ -1088,8 +1088,8 @@ function render(plan) {
         metadataStandard
       ].includes(w.standard), list = w.standard === "sharepoint-list-land@v1", tabular = snapshot || list;
       const name = `${plan.project}_${n.flow}_${n.table}`, src = `${name}_source`, sink = `${name}_landing`;
-      const sourceLocation = s.kind === "sftp" ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName } : s.kind === "s3" ? {
-        type: "AmazonS3Location",
+      const sourceLocation = s.kind === "sftp" ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName } : s.kind === "s3" || s.kind === "gcs" ? {
+        type: s.kind === "s3" ? "AmazonS3Location" : "GoogleCloudStorageLocation",
         bucketName: s.bucket,
         folderPath: s.folder,
         fileName: s.fileName
@@ -1148,7 +1148,7 @@ function render(plan) {
           } : {
             type: "BinarySource",
             storeSettings: {
-              type: s.kind === "sftp" ? "SftpReadSettings" : s.kind === "s3" ? "AmazonS3ReadSettings" : "AzureBlobFSReadSettings",
+              type: s.kind === "sftp" ? "SftpReadSettings" : s.kind === "s3" ? "AmazonS3ReadSettings" : s.kind === "gcs" ? "GoogleCloudStorageReadSettings" : "AzureBlobFSReadSettings",
               recursive: false
             }
           },
