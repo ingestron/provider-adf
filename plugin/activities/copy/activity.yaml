@@ -17,6 +17,7 @@ optionsSchema:
           immutable-file-copy@v1,
           snapshot-to-databricks@v1,
           metadata-snapshot-land@v1,
+          sharepoint-list-land@v1,
         ]
     group:
       type: string
@@ -46,5 +47,17 @@ generator:
 requirements:
   execution: adf-copy
   features: [existing-linked-services]
-  sourceKinds: [azure-sql, sql-server, adls, sftp]
+  sourceKinds:
+    [
+      azure-sql,
+      sql-server,
+      postgresql,
+      mysql,
+      oracle,
+      adls,
+      s3,
+      gcs,
+      sftp,
+      sharepoint-list,
+    ]
   evidence: offline

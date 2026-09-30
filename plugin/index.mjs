@@ -425,7 +425,7 @@ var fail2 = (message) => {
   throw new Error(message);
 };
 function sqlShape(id, text) {
-  const stripped = String(text).replace(/N?'(?:[^']|'')*'/g, "''").replace(/\[[^\]]*\]/g, "[]").replace(/"[^"]*"/g, '""');
+  const stripped = String(text).replace(/N?'(?:[^']|'')*'/g, "''").replace(/\[[^\]]*\]/g, "[]").replace(/`[^`]*`/g, "``").replace(/"[^"]*"/g, '""');
   if (/--|\/\*|;/.test(stripped))
     fail2(`${id}: query must be one statement without comments or semicolons`);
   if (/\b(INSERT|UPDATE|DELETE|MERGE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|DENY|EXEC|EXECUTE|CALL|USE|SET|INTO|BACKUP|RESTORE|DBCC|OPENROWSET|OPENQUERY|OPENDATASOURCE|WAITFOR|SHUTDOWN|BULK)\b/i.test(
@@ -516,34 +516,81 @@ function contractRules(contract) {
     });
   return rules;
 }
-var quote = (name) => "[" + name.replaceAll("]", "]]") + "]";
+var dialects = {
+  tsql: {
+    quote: (n) => "[" + n.replaceAll("]", "]]") + "]",
+    count: "COUNT_BIG",
+    ifNull: "ISNULL",
+    text: (v) => `N'${v.replaceAll("'", "''")}'`,
+    alias: " AS d",
+    dual: "",
+    regex: void 0
+  },
+  postgres: {
+    quote: (n) => `"${n.replaceAll('"', '""')}"`,
+    count: "COUNT",
+    ifNull: "COALESCE",
+    text: (v) => `'${v.replaceAll("'", "''")}'`,
+    alias: " AS d",
+    dual: "",
+    regex: (c, p) => `CAST(${c} AS TEXT) !~ ${p}`
+  },
+  mysql: {
+    quote: (n) => "`" + n.replaceAll("`", "``") + "`",
+    count: "COUNT",
+    ifNull: "COALESCE",
+    text: (v) => `'${v.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`,
+    alias: " AS d",
+    dual: "",
+    regex: (c, p) => `NOT REGEXP_LIKE(${c}, ${p})`
+  },
+  oracle: {
+    quote: (n) => `"${n.replaceAll('"', '""')}"`,
+    count: "COUNT",
+    ifNull: "COALESCE",
+    text: (v) => `'${v.replaceAll("'", "''")}'`,
+    // Oracle rejects AS before a table alias and needs a FROM clause.
+    alias: " d",
+    dual: " FROM DUAL",
+    regex: (c, p) => `NOT REGEXP_LIKE(${c}, ${p})`
+  }
+};
 var numeric = (type) => /^(BIGINT|INT|INTEGER|SMALLINT|DOUBLE|FLOAT|DECIMAL)/.test(type);
-function literals(values, type) {
+function literals(values, type, d) {
   return (Array.isArray(values) ? values : []).flatMap(
-    (v) => type === "STRING" && typeof v === "string" ? [`N'${v.replaceAll("'", "''")}'`] : numeric(type) && typeof v === "number" && Number.isFinite(v) ? [String(v)] : type === "BOOLEAN" && typeof v === "boolean" ? [v ? "1" : "0"] : []
+    (v) => type === "STRING" && typeof v === "string" ? [d.text(v)] : numeric(type) && typeof v === "number" && Number.isFinite(v) ? [String(v)] : type === "BOOLEAN" && typeof v === "boolean" ? [v ? "1" : "0"] : []
   );
 }
-function measure(rule, column, properties, from) {
-  const sum = (condition) => `ISNULL(SUM(CASE WHEN ${condition} THEN 1 ELSE 0 END), 0)`;
-  if (rule.metric === "rowCount") return "COUNT_BIG(*)";
+function measure(rule, column, properties, from, d) {
+  const sum = (condition) => `${d.ifNull}(SUM(CASE WHEN ${condition} THEN 1 ELSE 0 END), 0)`;
+  if (rule.metric === "rowCount") return `${d.count}(*)`;
   if (rule.metric === "duplicateValues") {
-    if (column) return `COUNT_BIG(${column}) - COUNT_BIG(DISTINCT ${column})`;
-    return `COUNT_BIG(*) - (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT ${properties.join(", ")} FROM ${from}) AS d)`;
+    if (column) return `${d.count}(${column}) - ${d.count}(DISTINCT ${column})`;
+    return `${d.count}(*) - (SELECT ${d.count}(*) FROM (SELECT DISTINCT ${properties.join(", ")} FROM ${from})${d.alias})`;
   }
   const { name, type } = column;
-  const c = quote(name);
+  const c = d.quote(name);
   if (rule.metric === "nullValues") return sum(`${c} IS NULL`);
   if (rule.metric === "missingValues") {
-    const missing = literals(rule.arguments.missingValues ?? [null, ""], type);
+    const missing = literals(
+      rule.arguments.missingValues ?? [null, ""],
+      type,
+      d
+    );
     return sum(
       missing.length ? `${c} IS NULL OR ${c} IN (${missing.join(", ")})` : `${c} IS NULL`
     );
   }
-  if (typeof rule.arguments.pattern === "string")
-    fail2(
-      `${rule.id}: SQL Server has no portable regular expressions; use arguments.validValues or a Databricks standard`
+  if (typeof rule.arguments.pattern === "string") {
+    if (!d.regex)
+      fail2(
+        `${rule.id}: SQL Server has no portable regular expressions; use arguments.validValues or a Databricks standard`
+      );
+    return sum(
+      `${c} IS NOT NULL AND ${d.regex(c, d.text(`^(${rule.arguments.pattern})$`).replace(/^N/, ""))}`
     );
-  const valid = literals(rule.arguments.validValues, type);
+  }
+  const valid = literals(rule.arguments.validValues, type, d);
   return sum(
     valid.length ? `${c} IS NOT NULL AND ${c} NOT IN (${valid.join(", ")})` : `${c} IS NOT NULL`
   );
@@ -561,10 +608,8 @@ function qualityRules(contract, columns) {
       return {
         id: rule.id,
         metric: "sql",
-        query: sqlShape(rule.id, rule.query).replaceAll(
-          "${column}",
-          rule.column ? quote(column(rule, rule.column).name) : "${column}"
-        ),
+        query: sqlShape(rule.id, rule.query),
+        ...rule.column ? { column: column(rule, rule.column).name } : {},
         operator: rule.operator,
         threshold: rule.threshold,
         unit: "rows",
@@ -573,10 +618,6 @@ function qualityRules(contract, columns) {
     }
     if (["nullValues", "missingValues", "invalidValues"].includes(rule.metric) && !rule.column)
       fail2(`${rule.id}: ${rule.metric} needs a column`);
-    if (rule.metric === "invalidValues" && typeof rule.arguments.pattern === "string")
-      fail2(
-        `${rule.id}: SQL Server has no portable regular expressions; use arguments.validValues or a Databricks standard`
-      );
     const properties = (rule.arguments.properties ?? []).map(
       (p) => column(rule, p).name
     );
@@ -590,6 +631,7 @@ function qualityRules(contract, columns) {
       ...properties.length ? { properties } : {},
       ...rule.arguments.validValues !== void 0 ? { validValues: rule.arguments.validValues } : {},
       ...rule.arguments.missingValues !== void 0 ? { missingValues: rule.arguments.missingValues } : {},
+      ...typeof rule.arguments.pattern === "string" ? { pattern: rule.arguments.pattern } : {},
       operator: rule.operator,
       threshold: rule.threshold,
       unit: rule.unit,
@@ -597,30 +639,36 @@ function qualityRules(contract, columns) {
     };
   });
 }
-function qualityQuery(rules, columns, schema, table) {
+function qualityQuery(rules, columns, schema, table, dialect = "tsql") {
+  const d = dialects[dialect] ?? fail2(`Unsupported SQL dialect ${dialect}`);
   const types = new Map(columns.map((c) => [c.name, c.type]));
-  const from = `${quote(schema)}.${quote(table)}`;
+  const from = `${d.quote(schema)}.${d.quote(table)}`;
   const selected = rules.map((rule, i) => {
     if (rule.metric === "sql")
-      return `(${rule.query.replaceAll("${table}", from)}) AS q${i}`;
+      return `(${rule.query.replaceAll("${table}", from).replaceAll(
+        "${column}",
+        rule.column ? d.quote(rule.column) : "${column}"
+      )}) AS q${i}`;
     const target = rule.column ? { name: rule.column, type: types.get(rule.column) } : void 0;
     let value = measure(
       {
         ...rule,
         arguments: {
           validValues: rule.validValues,
-          missingValues: rule.missingValues
+          missingValues: rule.missingValues,
+          pattern: rule.pattern
         }
       },
-      rule.metric === "duplicateValues" && target ? quote(target.name) : target,
-      (rule.properties ?? []).map(quote),
-      from
+      rule.metric === "duplicateValues" && target ? d.quote(target.name) : target,
+      (rule.properties ?? []).map(d.quote),
+      from,
+      d
     );
     if (rule.unit === "percent" && rule.metric !== "rowCount")
-      value = `ISNULL(CAST(100.0 * (${value}) / NULLIF(COUNT_BIG(*), 0) AS DECIMAL(9, 4)), 0)`;
+      value = `${d.ifNull}(CAST(100.0 * (${value}) / NULLIF(${d.count}(*), 0) AS DECIMAL(9, 4)), 0)`;
     return `(SELECT ${value} FROM ${from}) AS q${i}`;
   });
-  return `SELECT ${selected.join(", ")}`;
+  return `SELECT ${selected.join(", ")}${d.dual}`;
 }
 var passing = (c, value = "x") => {
   const t = c.threshold;
@@ -649,6 +697,56 @@ function passingExpression(rules) {
   return conditions.length === 1 ? `@${conditions[0]}` : `@and(${conditions.join(", ")})`;
 }
 
+// src/sql-sources.mjs
+var sqlSources = {
+  "azure-sql": {
+    dataset: "AzureSqlTable",
+    source: "AzureSqlSource",
+    query: "sqlReaderQuery",
+    dialect: "tsql",
+    options: { partitionOption: "None" },
+    table: (s) => ({ schema: s.schema, table: s.table })
+  },
+  "sql-server": {
+    dataset: "SqlServerTable",
+    source: "SqlSource",
+    query: "sqlReaderQuery",
+    dialect: "tsql",
+    options: { partitionOption: "None" },
+    table: (s) => ({ schema: s.schema, table: s.table })
+  },
+  postgresql: {
+    dataset: "PostgreSqlV2Table",
+    source: "PostgreSqlV2Source",
+    query: "query",
+    dialect: "postgres",
+    options: {},
+    table: (s) => ({ schema: s.schema, table: s.table })
+  },
+  mysql: {
+    dataset: "MySqlTable",
+    source: "MySqlSource",
+    query: "query",
+    dialect: "mysql",
+    options: {},
+    // MySQL has no schema below the database; `schema` names the database.
+    table: (s) => ({ tableName: s.table })
+  },
+  oracle: {
+    dataset: "OracleTable",
+    source: "OracleSource",
+    query: "oracleReaderQuery",
+    dialect: "oracle",
+    options: {},
+    table: (s) => ({ schema: s.schema, table: s.table })
+  }
+};
+var sqlKinds = Object.keys(sqlSources);
+function selectQuery(kind, columns, schema, table) {
+  const { quote } = dialects[sqlSources[kind].dialect];
+  return `SELECT ${columns.map((c) => quote(c.name)).join(", ")} FROM ${quote(schema)}.${quote(table)}`;
+}
+
 // src/index.mjs
 var check2 = (ok, message) => {
   if (!ok) throw new Error(message);
@@ -673,21 +771,28 @@ var standards = [
   },
   {
     id: "snapshot-to-databricks@v1",
-    sources: ["azure-sql", "sql-server"],
+    sources: sqlKinds,
     dataFlow: "forbidden",
     consistency: "frozen-extract",
     delivery: "verified Parquet and atomically updated delivery index via a native Databricks notebook"
   },
   {
     id: "snapshot-land@v1",
-    sources: ["azure-sql", "sql-server"],
+    sources: sqlKinds,
     dataFlow: "forbidden",
     consistency: "frozen-extract",
     delivery: "isolated snapshot files; downstream publication required"
   },
   {
+    id: "sharepoint-list-land@v1",
+    sources: ["sharepoint-list"],
+    dataFlow: "forbidden",
+    consistency: "live list read; no point-in-time guarantee",
+    delivery: "one Parquet snapshot of the list per run"
+  },
+  {
     id: "immutable-file-copy@v1",
-    sources: ["adls", "sftp"],
+    sources: ["adls", "s3", "gcs", "sftp"],
     dataFlow: "forbidden",
     consistency: "completed immutable file",
     delivery: "one preserved binary file per run"
@@ -831,7 +936,34 @@ function validate(plan) {
         w.publication === void 0 && t.storageAccount === void 0,
         "Publication settings require snapshot-to-databricks@v1"
       );
-    if ([
+    if (w.standard === "sharepoint-list-land@v1") {
+      strict(
+        s,
+        ["kind", "linkedService", "listName", "path", "entity"],
+        "SharePoint list source"
+      );
+      check2(
+        (s.entity ?? "list") === "list",
+        "ADF reads SharePoint lists natively; SharePoint files need another route"
+      );
+      check2(
+        s.kind === "sharepoint-list" && resource(s.linkedService),
+        "SharePoint lists need a SharePoint Online List linked service"
+      );
+      const listName = sharePointList(s);
+      check2(
+        typeof listName === "string" && listName.length > 0 && listName.length <= 255 && !listName.includes("'"),
+        "Name the list with listName or path Lists/<name>; it cannot contain an apostrophe"
+      );
+      check2(
+        n.columns.length > 0 && n.columns.every((c) => ident(c.name)),
+        "Explicit reviewed contract columns are required"
+      );
+      check2(
+        w.allowEmpty === void 0,
+        "allowEmpty applies to SQL snapshots only"
+      );
+    } else if ([
       "snapshot-land@v1",
       "snapshot-to-databricks@v1",
       metadataStandard
@@ -842,8 +974,12 @@ function validate(plan) {
         "SQL source"
       );
       check2(
-        ["azure-sql", "sql-server"].includes(s.kind),
-        "Snapshots support Azure SQL and SQL Server only"
+        w.standard === metadataStandard ? ["azure-sql", "sql-server"].includes(s.kind) : sqlKinds.includes(s.kind),
+        w.standard === metadataStandard ? "Metadata snapshots support Azure SQL and SQL Server only" : `Snapshots support ${sqlKinds.join(", ")}`
+      );
+      check2(
+        !w.quality?.some((q) => q.pattern !== void 0) || sqlSources[s.kind].dialect !== "tsql",
+        "Pattern quality rules need a source with regular expressions; SQL Server has none that are portable. Use arguments.validValues or another source"
       );
       check2(
         s.consistency === "frozen-extract",
@@ -872,6 +1008,7 @@ function validate(plan) {
           "kind",
           "linkedService",
           "fileSystem",
+          "bucket",
           "folder",
           "fileName",
           "completion",
@@ -880,8 +1017,8 @@ function validate(plan) {
         "file source"
       );
       check2(
-        ["adls", "sftp"].includes(s.kind) && resource(s.linkedService),
-        "Files support ADLS and SFTP only"
+        ["adls", "s3", "gcs", "sftp"].includes(s.kind) && resource(s.linkedService),
+        "Files support ADLS, S3, Google Cloud Storage and SFTP only"
       );
       check2(
         s.format === void 0 || ["csv", "tsv", "json", "jsonl", "parquet", "xml", "xlsx"].includes(
@@ -896,6 +1033,10 @@ function validate(plan) {
       check2(
         s.kind === "adls" ? /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(s.fileSystem) : s.fileSystem === void 0,
         "fileSystem applies to ADLS only"
+      );
+      check2(
+        ["s3", "gcs"].includes(s.kind) ? /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/.test(s.bucket) : s.bucket === void 0,
+        "bucket applies to S3 and Google Cloud Storage and must be a valid bucket name"
       );
       check2(w.allowEmpty === void 0, "allowEmpty applies to snapshots only");
     }
@@ -913,6 +1054,7 @@ function validate(plan) {
   );
 }
 var expression2 = (value) => ({ type: "Expression", value });
+var sharePointList = (s) => s.listName ?? (typeof s.path === "string" && s.path.startsWith("Lists/") ? decodeURIComponent(s.path.slice("Lists/".length)) : void 0);
 function render(plan) {
   validate(plan);
   const assets = {}, resources = [];
@@ -944,24 +1086,30 @@ function render(plan) {
         "snapshot-land@v1",
         "snapshot-to-databricks@v1",
         metadataStandard
-      ].includes(w.standard);
+      ].includes(w.standard), list = w.standard === "sharepoint-list-land@v1", tabular = snapshot || list;
       const name = `${plan.project}_${n.flow}_${n.table}`, src = `${name}_source`, sink = `${name}_landing`;
-      const sourceLocation = s.kind === "sftp" ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName } : {
+      const sourceLocation = s.kind === "sftp" ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName } : s.kind === "s3" || s.kind === "gcs" ? {
+        type: s.kind === "s3" ? "AmazonS3Location" : "GoogleCloudStorageLocation",
+        bucketName: s.bucket,
+        folderPath: s.folder,
+        fileName: s.fileName
+      } : {
         type: "AzureBlobFSLocation",
         fileSystem: s.fileSystem,
         folderPath: s.folder,
         fileName: s.fileName
       };
+      const sql = snapshot ? sqlSources[s.kind] : void 0;
       add("datasets", src, {
-        type: snapshot ? s.kind === "azure-sql" ? "AzureSqlTable" : "SqlServerTable" : "Binary",
+        type: snapshot ? sql.dataset : list ? "SharePointOnlineListResource" : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: s.linkedService
         },
-        typeProperties: snapshot ? { schema: s.schema, table: s.table } : { location: sourceLocation }
+        typeProperties: snapshot ? sql.table(s) : list ? { listName: sharePointList(s) } : { location: sourceLocation }
       });
       add("datasets", sink, {
-        type: snapshot ? "Parquet" : "Binary",
+        type: tabular ? "Parquet" : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: t.linkedService
@@ -974,9 +1122,9 @@ function render(plan) {
             folderPath: expression2(
               `@concat('${t.path}/${n.flow}/${n.table}/', dataset().runId)`
             ),
-            ...!snapshot ? { fileName: s.fileName } : {}
+            ...!tabular ? { fileName: s.fileName } : {}
           },
-          ...snapshot ? { compressionCodec: "snappy" } : {}
+          ...tabular ? { compressionCodec: "snappy" } : {}
         }
       });
       const policy = {
@@ -991,17 +1139,20 @@ function render(plan) {
         policy,
         typeProperties: {
           source: snapshot ? {
-            type: s.kind === "azure-sql" ? "AzureSqlSource" : "SqlSource",
-            sqlReaderQuery: `SELECT ${n.columns.map((c) => "[" + c.name + "]").join(", ")} FROM [${s.schema}].[${s.table}]`,
-            partitionOption: "None"
+            type: sql.source,
+            [sql.query]: selectQuery(s.kind, n.columns, s.schema, s.table),
+            ...sql.options
+          } : list ? {
+            type: "SharePointOnlineListSource",
+            query: `$select=${n.columns.map((c) => c.name).join(",")}`
           } : {
             type: "BinarySource",
             storeSettings: {
-              type: s.kind === "sftp" ? "SftpReadSettings" : "AzureBlobFSReadSettings",
+              type: s.kind === "sftp" ? "SftpReadSettings" : s.kind === "s3" ? "AmazonS3ReadSettings" : s.kind === "gcs" ? "GoogleCloudStorageReadSettings" : "AzureBlobFSReadSettings",
               recursive: false
             }
           },
-          sink: snapshot ? {
+          sink: tabular ? {
             type: "ParquetSink",
             storeSettings: { type: "AzureBlobFSWriteSettings" },
             formatSettings: { type: "ParquetWriteSettings" }
@@ -1011,7 +1162,7 @@ function render(plan) {
           },
           enableStaging: false,
           validateDataConsistency: true,
-          ...snapshot ? {
+          ...tabular ? {
             enableSkipIncompatibleRow: false,
             translator: {
               type: "TabularTranslator",
@@ -1040,14 +1191,15 @@ function render(plan) {
           policy,
           typeProperties: {
             source: {
-              type: s.kind === "azure-sql" ? "AzureSqlSource" : "SqlSource",
-              sqlReaderQuery: qualityQuery(
+              type: sql.source,
+              [sql.query]: qualityQuery(
                 w.quality,
                 n.columns,
                 s.schema,
-                s.table
+                s.table,
+                sql.dialect
               ),
-              partitionOption: "None"
+              ...sql.options
             },
             dataset: { type: "DatasetReference", referenceName: src },
             firstRowOnly: true

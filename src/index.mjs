@@ -5,6 +5,7 @@ import {
   renderMetadata,
 } from "./metadata.mjs";
 import { validatePublication, publicationPipeline } from "./publication.mjs";
+import { sqlSources, sqlKinds, selectQuery } from "./sql-sources.mjs";
 import { qualityRules, qualityQuery, passingExpression } from "./quality.mjs";
 const check = (ok, message) => {
   if (!ok) throw new Error(message);
@@ -45,7 +46,7 @@ export const standards = [
   },
   {
     id: "snapshot-to-databricks@v1",
-    sources: ["azure-sql", "sql-server"],
+    sources: sqlKinds,
     dataFlow: "forbidden",
     consistency: "frozen-extract",
     delivery:
@@ -53,14 +54,21 @@ export const standards = [
   },
   {
     id: "snapshot-land@v1",
-    sources: ["azure-sql", "sql-server"],
+    sources: sqlKinds,
     dataFlow: "forbidden",
     consistency: "frozen-extract",
     delivery: "isolated snapshot files; downstream publication required",
   },
   {
+    id: "sharepoint-list-land@v1",
+    sources: ["sharepoint-list"],
+    dataFlow: "forbidden",
+    consistency: "live list read; no point-in-time guarantee",
+    delivery: "one Parquet snapshot of the list per run",
+  },
+  {
     id: "immutable-file-copy@v1",
-    sources: ["adls", "sftp"],
+    sources: ["adls", "s3", "gcs", "sftp"],
     dataFlow: "forbidden",
     consistency: "completed immutable file",
     delivery: "one preserved binary file per run",
@@ -219,7 +227,37 @@ export function validate(plan) {
         w.publication === undefined && t.storageAccount === undefined,
         "Publication settings require snapshot-to-databricks@v1",
       );
-    if (
+    if (w.standard === "sharepoint-list-land@v1") {
+      strict(
+        s,
+        ["kind", "linkedService", "listName", "path", "entity"],
+        "SharePoint list source",
+      );
+      check(
+        (s.entity ?? "list") === "list",
+        "ADF reads SharePoint lists natively; SharePoint files need another route",
+      );
+      check(
+        s.kind === "sharepoint-list" && resource(s.linkedService),
+        "SharePoint lists need a SharePoint Online List linked service",
+      );
+      const listName = sharePointList(s);
+      check(
+        typeof listName === "string" &&
+          listName.length > 0 &&
+          listName.length <= 255 &&
+          !listName.includes("'"),
+        "Name the list with listName or path Lists/<name>; it cannot contain an apostrophe",
+      );
+      check(
+        n.columns.length > 0 && n.columns.every((c) => ident(c.name)),
+        "Explicit reviewed contract columns are required",
+      );
+      check(
+        w.allowEmpty === undefined,
+        "allowEmpty applies to SQL snapshots only",
+      );
+    } else if (
       [
         "snapshot-land@v1",
         "snapshot-to-databricks@v1",
@@ -232,8 +270,17 @@ export function validate(plan) {
         "SQL source",
       );
       check(
-        ["azure-sql", "sql-server"].includes(s.kind),
-        "Snapshots support Azure SQL and SQL Server only",
+        w.standard === metadataStandard
+          ? ["azure-sql", "sql-server"].includes(s.kind)
+          : sqlKinds.includes(s.kind),
+        w.standard === metadataStandard
+          ? "Metadata snapshots support Azure SQL and SQL Server only"
+          : `Snapshots support ${sqlKinds.join(", ")}`,
+      );
+      check(
+        !w.quality?.some((q) => q.pattern !== undefined) ||
+          sqlSources[s.kind].dialect !== "tsql",
+        "Pattern quality rules need a source with regular expressions; SQL Server has none that are portable. Use arguments.validValues or another source",
       );
       check(
         s.consistency === "frozen-extract",
@@ -262,6 +309,7 @@ export function validate(plan) {
           "kind",
           "linkedService",
           "fileSystem",
+          "bucket",
           "folder",
           "fileName",
           "completion",
@@ -270,8 +318,9 @@ export function validate(plan) {
         "file source",
       );
       check(
-        ["adls", "sftp"].includes(s.kind) && resource(s.linkedService),
-        "Files support ADLS and SFTP only",
+        ["adls", "s3", "gcs", "sftp"].includes(s.kind) &&
+          resource(s.linkedService),
+        "Files support ADLS, S3, Google Cloud Storage and SFTP only",
       );
       check(
         s.format === undefined ||
@@ -293,6 +342,12 @@ export function validate(plan) {
           : s.fileSystem === undefined,
         "fileSystem applies to ADLS only",
       );
+      check(
+        ["s3", "gcs"].includes(s.kind)
+          ? /^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$/.test(s.bucket)
+          : s.bucket === undefined,
+        "bucket applies to S3 and Google Cloud Storage and must be a valid bucket name",
+      );
       check(w.allowEmpty === undefined, "allowEmpty applies to snapshots only");
     }
   }
@@ -310,6 +365,12 @@ export function validate(plan) {
   );
 }
 const expression = (value) => ({ type: "Expression", value });
+/** A list named directly, or by the portable path Lists/<name>. */
+const sharePointList = (s) =>
+  s.listName ??
+  (typeof s.path === "string" && s.path.startsWith("Lists/")
+    ? decodeURIComponent(s.path.slice("Lists/".length))
+    : undefined);
 export function render(plan) {
   validate(plan);
   const assets = {},
@@ -353,35 +414,51 @@ export function render(plan) {
           "snapshot-land@v1",
           "snapshot-to-databricks@v1",
           metadataStandard,
-        ].includes(w.standard);
+        ].includes(w.standard),
+        list = w.standard === "sharepoint-list-land@v1",
+        // Tabular reads land typed Parquet through the reviewed column mapping.
+        tabular = snapshot || list;
       const name = `${plan.project}_${n.flow}_${n.table}`,
         src = `${name}_source`,
         sink = `${name}_landing`;
       const sourceLocation =
         s.kind === "sftp"
           ? { type: "SftpLocation", folderPath: s.folder, fileName: s.fileName }
-          : {
-              type: "AzureBlobFSLocation",
-              fileSystem: s.fileSystem,
-              folderPath: s.folder,
-              fileName: s.fileName,
-            };
+          : s.kind === "s3" || s.kind === "gcs"
+            ? {
+                type:
+                  s.kind === "s3"
+                    ? "AmazonS3Location"
+                    : "GoogleCloudStorageLocation",
+                bucketName: s.bucket,
+                folderPath: s.folder,
+                fileName: s.fileName,
+              }
+            : {
+                type: "AzureBlobFSLocation",
+                fileSystem: s.fileSystem,
+                folderPath: s.folder,
+                fileName: s.fileName,
+              };
+      const sql = snapshot ? sqlSources[s.kind] : undefined;
       add("datasets", src, {
         type: snapshot
-          ? s.kind === "azure-sql"
-            ? "AzureSqlTable"
-            : "SqlServerTable"
-          : "Binary",
+          ? sql.dataset
+          : list
+            ? "SharePointOnlineListResource"
+            : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: s.linkedService,
         },
         typeProperties: snapshot
-          ? { schema: s.schema, table: s.table }
-          : { location: sourceLocation },
+          ? sql.table(s)
+          : list
+            ? { listName: sharePointList(s) }
+            : { location: sourceLocation },
       });
       add("datasets", sink, {
-        type: snapshot ? "Parquet" : "Binary",
+        type: tabular ? "Parquet" : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: t.linkedService,
@@ -394,9 +471,9 @@ export function render(plan) {
             folderPath: expression(
               `@concat('${t.path}/${n.flow}/${n.table}/', dataset().runId)`,
             ),
-            ...(!snapshot ? { fileName: s.fileName } : {}),
+            ...(!tabular ? { fileName: s.fileName } : {}),
           },
-          ...(snapshot ? { compressionCodec: "snappy" } : {}),
+          ...(tabular ? { compressionCodec: "snappy" } : {}),
         },
       });
       const policy = {
@@ -412,21 +489,30 @@ export function render(plan) {
         typeProperties: {
           source: snapshot
             ? {
-                type: s.kind === "azure-sql" ? "AzureSqlSource" : "SqlSource",
-                sqlReaderQuery: `SELECT ${n.columns.map((c) => "[" + c.name + "]").join(", ")} FROM [${s.schema}].[${s.table}]`,
-                partitionOption: "None",
+                type: sql.source,
+                [sql.query]: selectQuery(s.kind, n.columns, s.schema, s.table),
+                ...sql.options,
               }
-            : {
-                type: "BinarySource",
-                storeSettings: {
-                  type:
-                    s.kind === "sftp"
-                      ? "SftpReadSettings"
-                      : "AzureBlobFSReadSettings",
-                  recursive: false,
+            : list
+              ? {
+                  type: "SharePointOnlineListSource",
+                  query: `$select=${n.columns.map((c) => c.name).join(",")}`,
+                }
+              : {
+                  type: "BinarySource",
+                  storeSettings: {
+                    type:
+                      s.kind === "sftp"
+                        ? "SftpReadSettings"
+                        : s.kind === "s3"
+                          ? "AmazonS3ReadSettings"
+                          : s.kind === "gcs"
+                            ? "GoogleCloudStorageReadSettings"
+                            : "AzureBlobFSReadSettings",
+                    recursive: false,
+                  },
                 },
-              },
-          sink: snapshot
+          sink: tabular
             ? {
                 type: "ParquetSink",
                 storeSettings: { type: "AzureBlobFSWriteSettings" },
@@ -438,7 +524,7 @@ export function render(plan) {
               },
           enableStaging: false,
           validateDataConsistency: true,
-          ...(snapshot
+          ...(tabular
             ? {
                 enableSkipIncompatibleRow: false,
                 translator: {
@@ -470,14 +556,15 @@ export function render(plan) {
           policy,
           typeProperties: {
             source: {
-              type: s.kind === "azure-sql" ? "AzureSqlSource" : "SqlSource",
-              sqlReaderQuery: qualityQuery(
+              type: sql.source,
+              [sql.query]: qualityQuery(
                 w.quality,
                 n.columns,
                 s.schema,
                 s.table,
+                sql.dialect,
               ),
-              partitionOption: "None",
+              ...sql.options,
             },
             dataset: { type: "DatasetReference", referenceName: src },
             firstRowOnly: true,

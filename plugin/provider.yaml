@@ -49,8 +49,153 @@ sources:
       maturity: preview
       verified: 2026-09-30
       note:
-        SQL Server and Azure SQL through Copy; private sources need a self-hosted
-        integration runtime
+        SQL Server and Azure SQL through Copy; set variant to match the linked
+        service; private sources need a self-hosted integration runtime
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+        - variant
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+        variant:
+          enum:
+            - azure-sql
+            - sql-server
+      additionalProperties: false
+    source:
+      kind: "{{binding.variant}}"
+      linkedService: "{{binding.linkedService}}"
+      consistency: frozen-extract
+  postgresql:
+    route: native
+    standards:
+      - snapshot-land@v1
+      - snapshot-to-databricks@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-postgresql
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/introduction
+        note: An existing data factory and linked services
+      auth:
+        - linked-service
+      network:
+        - public
+        - private-network
+        - on-premises
+      maturity: preview
+      verified: 2026-09-30
+      note: PostgreSQL V2 connector, PostgreSQL 12 and later
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: postgresql
+      linkedService: "{{binding.linkedService}}"
+      consistency: frozen-extract
+  mysql:
+    route: native
+    standards:
+      - snapshot-land@v1
+      - snapshot-to-databricks@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-mysql
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/introduction
+        note: An existing data factory and linked services
+      auth:
+        - linked-service
+      network:
+        - public
+        - private-network
+        - on-premises
+      maturity: preview
+      verified: 2026-09-30
+      note: MySQL connector version 2.0; the table schema names the database
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: mysql
+      linkedService: "{{binding.linkedService}}"
+      consistency: frozen-extract
+  oracle:
+    route: native
+    standards:
+      - snapshot-land@v1
+      - snapshot-to-databricks@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-oracle
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/introduction
+        note: An existing data factory and linked services
+      auth:
+        - linked-service
+      network:
+        - public
+        - private-network
+        - on-premises
+      maturity: preview
+      verified: 2026-09-30
+      note: Oracle connector version 2.0
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: oracle
+      linkedService: "{{binding.linkedService}}"
+      consistency: frozen-extract
   azure-blob:
     route: native
     standards:
@@ -80,6 +225,209 @@ sources:
       note:
         Copies one completed file unchanged; it does not parse it into contract
         columns
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+        - fileSystem
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+        fileSystem:
+          type: string
+          minLength: 3
+          maxLength: 63
+      additionalProperties: false
+    source:
+      kind: adls
+      linkedService: "{{binding.linkedService}}"
+      fileSystem: "{{binding.fileSystem}}"
+      completion: immutable
+  s3:
+    route: native
+    standards:
+      - immutable-file-copy@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-amazon-simple-storage-service
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/introduction
+        note: An existing data factory and linked services
+      auth:
+        - linked-service
+      network:
+        - public
+        - private-network
+        - on-premises
+      maturity: preview
+      verified: 2026-09-30
+      note:
+        Copies one completed file unchanged; it does not parse it into contract
+        columns
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+        - bucket
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+        bucket:
+          type: string
+          minLength: 3
+          maxLength: 63
+      additionalProperties: false
+    source:
+      kind: s3
+      linkedService: "{{binding.linkedService}}"
+      bucket: "{{binding.bucket}}"
+      completion: immutable
+  gcs:
+    route: native
+    standards:
+      - immutable-file-copy@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-google-cloud-storage
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/introduction
+        note: An existing data factory and linked services
+      auth:
+        - linked-service
+      network:
+        - public
+        - private-network
+        - on-premises
+      maturity: preview
+      verified: 2026-09-30
+      note:
+        Copies one completed file unchanged; it does not parse it into contract
+        columns
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+        - bucket
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+        bucket:
+          type: string
+          minLength: 3
+          maxLength: 63
+      additionalProperties: false
+    source:
+      kind: gcs
+      linkedService: "{{binding.linkedService}}"
+      bucket: "{{binding.bucket}}"
+      completion: immutable
+  sftp:
+    route: native
+    standards:
+      - immutable-file-copy@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-sftp
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/introduction
+        note: An existing data factory and linked services
+      auth:
+        - linked-service
+      network:
+        - public
+        - private-network
+        - on-premises
+      maturity: preview
+      verified: 2026-09-30
+      note:
+        Copies one completed file unchanged; it does not parse it into contract
+        columns
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: sftp
+      linkedService: "{{binding.linkedService}}"
+      completion: immutable
+  sharepoint:
+    route: native
+    standards:
+      - sharepoint-list-land@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-sharepoint-online-list
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/connector-sharepoint-online-list
+        note:
+          A SharePoint Online List linked service with service principal certificate
+          authentication
+      auth:
+        - service-principal-certificate
+      network:
+        - public
+      maturity: preview
+      verified: 2026-09-30
+      note:
+        Lists only, read live without a point-in-time guarantee; SharePoint files
+        are not a native ADF route
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: sharepoint-list
+      linkedService: "{{binding.linkedService}}"
 quality:
   library: {}
   standards:
