@@ -664,6 +664,8 @@ commands:
             type: object
           binding:
             type: object
+          connectionBinding:
+            type: object
     - name: connection prepare
       description: Prepare a project-resolved connection, selected fields and
         runtime-only secrets
