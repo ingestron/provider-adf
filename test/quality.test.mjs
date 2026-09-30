@@ -496,3 +496,38 @@ test("Salesforce and HubSpot objects land as typed Parquet through Copy", () => 
   p.nodes[0].source = { kind: "jira", linkedService: "x", object: "issues" };
   assert.throws(() => validate(p), /read salesforce, hubspot/);
 });
+
+test("file copies accept the portable path shared with connectors and Databricks", () => {
+  const p = plan({
+    standard: "immutable-file-copy@v1",
+    target: { linkedService: "landing", fileSystem: "landing", path: "retail" },
+  });
+  const location = (source) => {
+    p.nodes[0].source = {
+      kind: "s3",
+      linkedService: "vendor_s3",
+      bucket: "vendor-drops",
+      completion: "immutable",
+      ...source,
+    };
+    validate(p);
+    return render(p)["datasets/retail_source_customers_source.json"].value
+      .properties.typeProperties.location;
+  };
+  assert.deepEqual(location({ path: "daily/2026/orders.csv", format: "csv" }), {
+    type: "AmazonS3Location",
+    bucketName: "vendor-drops",
+    folderPath: "daily/2026",
+    fileName: "orders.csv",
+  });
+  assert.deepEqual(location({ path: "orders.parquet" }), {
+    type: "AmazonS3Location",
+    bucketName: "vendor-drops",
+    fileName: "orders.parquet",
+  });
+  assert.throws(() => location({ path: "daily/orders" }), /folders, wildcards/);
+  assert.throws(
+    () => location({ path: "a/b.csv", folder: "a", fileName: "b.csv" }),
+    /not both/,
+  );
+});
