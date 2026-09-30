@@ -18,6 +18,7 @@ optionsSchema:
           snapshot-to-databricks@v1,
           metadata-snapshot-land@v1,
           sharepoint-list-land@v1,
+          app-land@v1,
         ]
     group:
       type: string
@@ -59,5 +60,7 @@ requirements:
       gcs,
       sftp,
       sharepoint-list,
+      salesforce,
+      hubspot,
     ]
   evidence: offline

@@ -7,6 +7,7 @@ import {
 import { validatePublication, publicationPipeline } from "./publication.mjs";
 import { sqlSources, sqlKinds, selectQuery } from "./sql-sources.mjs";
 import { qualityRules, qualityQuery, passingExpression } from "./quality.mjs";
+import { appSources } from "./app-sources.mjs";
 const check = (ok, message) => {
   if (!ok) throw new Error(message);
 };
@@ -65,6 +66,13 @@ export const standards = [
     dataFlow: "forbidden",
     consistency: "live list read; no point-in-time guarantee",
     delivery: "one Parquet snapshot of the list per run",
+  },
+  {
+    id: "app-land@v1",
+    sources: Object.keys(appSources),
+    dataFlow: "forbidden",
+    consistency: "live API read; no point-in-time guarantee",
+    delivery: "one Parquet snapshot of the object per run",
   },
   {
     id: "immutable-file-copy@v1",
@@ -227,7 +235,23 @@ export function validate(plan) {
         w.publication === undefined && t.storageAccount === undefined,
         "Publication settings require snapshot-to-databricks@v1",
       );
-    if (w.standard === "sharepoint-list-land@v1") {
+    if (w.standard === "app-land@v1") {
+      strict(s, ["kind", "linkedService", "object"], "application source");
+      const app = appSources[s.kind];
+      check(
+        app && resource(s.linkedService),
+        `Application copies read ${Object.keys(appSources).join(", ")} through an existing linked service`,
+      );
+      check(app.valid(s.object), `${app.label} object must be ${app.hint}`);
+      check(
+        n.columns.length > 0 && n.columns.every((c) => ident(c.name)),
+        "Explicit reviewed contract columns are required",
+      );
+      check(
+        w.allowEmpty === undefined,
+        "allowEmpty applies to SQL snapshots only",
+      );
+    } else if (w.standard === "sharepoint-list-land@v1") {
       strict(
         s,
         ["kind", "linkedService", "listName", "path", "entity"],
@@ -416,8 +440,9 @@ export function render(plan) {
           metadataStandard,
         ].includes(w.standard),
         list = w.standard === "sharepoint-list-land@v1",
+        app = w.standard === "app-land@v1" ? appSources[s.kind] : undefined,
         // Tabular reads land typed Parquet through the reviewed column mapping.
-        tabular = snapshot || list;
+        tabular = snapshot || list || app !== undefined;
       const name = `${plan.project}_${n.flow}_${n.table}`,
         src = `${name}_source`,
         sink = `${name}_landing`;
@@ -446,7 +471,9 @@ export function render(plan) {
           ? sql.dataset
           : list
             ? "SharePointOnlineListResource"
-            : "Binary",
+            : app
+              ? app.dataset
+              : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: s.linkedService,
@@ -455,7 +482,9 @@ export function render(plan) {
           ? sql.table(s)
           : list
             ? { listName: sharePointList(s) }
-            : { location: sourceLocation },
+            : app
+              ? app.table(s)
+              : { location: sourceLocation },
       });
       add("datasets", sink, {
         type: tabular ? "Parquet" : "Binary",
@@ -498,20 +527,22 @@ export function render(plan) {
                   type: "SharePointOnlineListSource",
                   query: `$select=${n.columns.map((c) => c.name).join(",")}`,
                 }
-              : {
-                  type: "BinarySource",
-                  storeSettings: {
-                    type:
-                      s.kind === "sftp"
-                        ? "SftpReadSettings"
-                        : s.kind === "s3"
-                          ? "AmazonS3ReadSettings"
-                          : s.kind === "gcs"
-                            ? "GoogleCloudStorageReadSettings"
-                            : "AzureBlobFSReadSettings",
-                    recursive: false,
+              : app
+                ? app.source(s, n.columns)
+                : {
+                    type: "BinarySource",
+                    storeSettings: {
+                      type:
+                        s.kind === "sftp"
+                          ? "SftpReadSettings"
+                          : s.kind === "s3"
+                            ? "AmazonS3ReadSettings"
+                            : s.kind === "gcs"
+                              ? "GoogleCloudStorageReadSettings"
+                              : "AzureBlobFSReadSettings",
+                      recursive: false,
+                    },
                   },
-                },
           sink: tabular
             ? {
                 type: "ParquetSink",
