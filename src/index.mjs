@@ -60,6 +60,13 @@ export const standards = [
     delivery: "isolated snapshot files; downstream publication required",
   },
   {
+    id: "sharepoint-list-land@v1",
+    sources: ["sharepoint-list"],
+    dataFlow: "forbidden",
+    consistency: "live list read; no point-in-time guarantee",
+    delivery: "one Parquet snapshot of the list per run",
+  },
+  {
     id: "immutable-file-copy@v1",
     sources: ["adls", "s3", "sftp"],
     dataFlow: "forbidden",
@@ -220,7 +227,37 @@ export function validate(plan) {
         w.publication === undefined && t.storageAccount === undefined,
         "Publication settings require snapshot-to-databricks@v1",
       );
-    if (
+    if (w.standard === "sharepoint-list-land@v1") {
+      strict(
+        s,
+        ["kind", "linkedService", "listName", "path", "entity"],
+        "SharePoint list source",
+      );
+      check(
+        (s.entity ?? "list") === "list",
+        "ADF reads SharePoint lists natively; SharePoint files need another route",
+      );
+      check(
+        s.kind === "sharepoint-list" && resource(s.linkedService),
+        "SharePoint lists need a SharePoint Online List linked service",
+      );
+      const listName = sharePointList(s);
+      check(
+        typeof listName === "string" &&
+          listName.length > 0 &&
+          listName.length <= 255 &&
+          !listName.includes("'"),
+        "Name the list with listName or path Lists/<name>; it cannot contain an apostrophe",
+      );
+      check(
+        n.columns.length > 0 && n.columns.every((c) => ident(c.name)),
+        "Explicit reviewed contract columns are required",
+      );
+      check(
+        w.allowEmpty === undefined,
+        "allowEmpty applies to SQL snapshots only",
+      );
+    } else if (
       [
         "snapshot-land@v1",
         "snapshot-to-databricks@v1",
@@ -327,6 +364,12 @@ export function validate(plan) {
   );
 }
 const expression = (value) => ({ type: "Expression", value });
+/** A list named directly, or by the portable path Lists/<name>. */
+const sharePointList = (s) =>
+  s.listName ??
+  (typeof s.path === "string" && s.path.startsWith("Lists/")
+    ? decodeURIComponent(s.path.slice("Lists/".length))
+    : undefined);
 export function render(plan) {
   validate(plan);
   const assets = {},
@@ -370,7 +413,10 @@ export function render(plan) {
           "snapshot-land@v1",
           "snapshot-to-databricks@v1",
           metadataStandard,
-        ].includes(w.standard);
+        ].includes(w.standard),
+        list = w.standard === "sharepoint-list-land@v1",
+        // Tabular reads land typed Parquet through the reviewed column mapping.
+        tabular = snapshot || list;
       const name = `${plan.project}_${n.flow}_${n.table}`,
         src = `${name}_source`,
         sink = `${name}_landing`;
@@ -392,15 +438,23 @@ export function render(plan) {
               };
       const sql = snapshot ? sqlSources[s.kind] : undefined;
       add("datasets", src, {
-        type: snapshot ? sql.dataset : "Binary",
+        type: snapshot
+          ? sql.dataset
+          : list
+            ? "SharePointOnlineListResource"
+            : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: s.linkedService,
         },
-        typeProperties: snapshot ? sql.table(s) : { location: sourceLocation },
+        typeProperties: snapshot
+          ? sql.table(s)
+          : list
+            ? { listName: sharePointList(s) }
+            : { location: sourceLocation },
       });
       add("datasets", sink, {
-        type: snapshot ? "Parquet" : "Binary",
+        type: tabular ? "Parquet" : "Binary",
         linkedServiceName: {
           type: "LinkedServiceReference",
           referenceName: t.linkedService,
@@ -413,9 +467,9 @@ export function render(plan) {
             folderPath: expression(
               `@concat('${t.path}/${n.flow}/${n.table}/', dataset().runId)`,
             ),
-            ...(!snapshot ? { fileName: s.fileName } : {}),
+            ...(!tabular ? { fileName: s.fileName } : {}),
           },
-          ...(snapshot ? { compressionCodec: "snappy" } : {}),
+          ...(tabular ? { compressionCodec: "snappy" } : {}),
         },
       });
       const policy = {
@@ -435,19 +489,24 @@ export function render(plan) {
                 [sql.query]: selectQuery(s.kind, n.columns, s.schema, s.table),
                 ...sql.options,
               }
-            : {
-                type: "BinarySource",
-                storeSettings: {
-                  type:
-                    s.kind === "sftp"
-                      ? "SftpReadSettings"
-                      : s.kind === "s3"
-                        ? "AmazonS3ReadSettings"
-                        : "AzureBlobFSReadSettings",
-                  recursive: false,
+            : list
+              ? {
+                  type: "SharePointOnlineListSource",
+                  query: `$select=${n.columns.map((c) => c.name).join(",")}`,
+                }
+              : {
+                  type: "BinarySource",
+                  storeSettings: {
+                    type:
+                      s.kind === "sftp"
+                        ? "SftpReadSettings"
+                        : s.kind === "s3"
+                          ? "AmazonS3ReadSettings"
+                          : "AzureBlobFSReadSettings",
+                    recursive: false,
+                  },
                 },
-              },
-          sink: snapshot
+          sink: tabular
             ? {
                 type: "ParquetSink",
                 storeSettings: { type: "AzureBlobFSWriteSettings" },
@@ -459,7 +518,7 @@ export function render(plan) {
               },
           enableStaging: false,
           validateDataConsistency: true,
-          ...(snapshot
+          ...(tabular
             ? {
                 enableSkipIncompatibleRow: false,
                 translator: {

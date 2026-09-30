@@ -337,6 +337,48 @@ sources:
       kind: sftp
       linkedService: "{{binding.linkedService}}"
       completion: immutable
+  sharepoint:
+    route: native
+    standards:
+      - sharepoint-list-land@v1
+    capabilities:
+      - snapshot
+    reference:
+      docs: https://learn.microsoft.com/azure/data-factory/connector-sharepoint-online-list
+      vendorStatus: ga
+      licence: Microsoft Azure service terms; generated files Apache-2.0
+      cost:
+        model: included
+        pricing: https://azure.microsoft.com/pricing/details/data-factory/data-pipeline/
+        note: Copy activity and pipeline orchestration run as Data Factory usage
+      access:
+        model: subscription
+        url: https://learn.microsoft.com/azure/data-factory/connector-sharepoint-online-list
+        note:
+          A SharePoint Online List linked service with service principal certificate
+          authentication
+      auth:
+        - service-principal-certificate
+      network:
+        - public
+      maturity: preview
+      verified: 2026-09-30
+      note:
+        Lists only, read live without a point-in-time guarantee; SharePoint files
+        are not a native ADF route
+    bindingSchema:
+      type: object
+      required:
+        - linkedService
+      properties:
+        linkedService:
+          type: string
+          minLength: 1
+          maxLength: 101
+      additionalProperties: false
+    source:
+      kind: sharepoint-list
+      linkedService: "{{binding.linkedService}}"
 quality:
   library: {}
   standards:

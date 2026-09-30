@@ -364,3 +364,60 @@ test("S3 files copy unchanged through the S3 location", () => {
   p.nodes[0].source.bucket = "Bad_Bucket";
   assert.throws(() => validate(p), /bucket/);
 });
+
+test("SharePoint lists land as typed Parquet through the list connector", () => {
+  const p = plan({
+    standard: "sharepoint-list-land@v1",
+    target: { linkedService: "landing", fileSystem: "landing", path: "retail" },
+  });
+  p.nodes[0].source = {
+    kind: "sharepoint-list",
+    linkedService: "finance_sharepoint",
+    listName: "Budgets",
+  };
+  validate(p);
+  const assets = render(p);
+  const dataset =
+    assets["datasets/retail_source_customers_source.json"].value.properties;
+  assert.deepEqual(
+    [dataset.type, dataset.typeProperties],
+    ["SharePointOnlineListResource", { listName: "Budgets" }],
+  );
+  const activities =
+    assets["pipelines/retail_source_customers.json"].value.properties
+      .activities;
+  assert.deepEqual(
+    activities.map((a) => a.name),
+    ["Copy"],
+  );
+  const copy = activities[0].typeProperties;
+  assert.deepEqual(copy.source, {
+    type: "SharePointOnlineListSource",
+    query: "$select=id,state",
+  });
+  assert.equal(copy.sink.type, "ParquetSink");
+  assert.equal(copy.translator.mappings.length, 2);
+  const landing =
+    assets["datasets/retail_source_customers_landing.json"].value.properties;
+  assert.equal(landing.type, "Parquet");
+  p.nodes[0].source = {
+    kind: "sharepoint-list",
+    linkedService: "finance_sharepoint",
+    path: "Lists/Team%20Budgets",
+    entity: "list",
+  };
+  validate(p);
+  assert.equal(
+    render(p)["datasets/retail_source_customers_source.json"].value.properties
+      .typeProperties.listName,
+    "Team Budgets",
+  );
+  p.nodes[0].source.entity = "file";
+  assert.throws(() => validate(p), /SharePoint files need another route/);
+  p.nodes[0].source = {
+    kind: "sharepoint-list",
+    linkedService: "x",
+    listName: "Bob's list",
+  };
+  assert.throws(() => validate(p), /apostrophe/);
+});
