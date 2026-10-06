@@ -1,13 +1,6 @@
 apiVersion: ingestron.project/v1
 id: retail
 providers:
-  packages:
-    adf:
-      source: adf
-      version: 2.3.1
-    databricks:
-      source: databricks
-      version: 2.1.0
   configurations:
     landing:
       package: adf
@@ -35,7 +28,7 @@ providers:
   packs:
     snapshots:
       source: ingestron/provider-adf/packs/sql-snapshot/pack.yaml
-      version: 2.3.1
+      version: 4.7.0
 defaults:
   provider: landing
 environments:
@@ -82,3 +75,6 @@ flows:
   - $resolve: ./flows/publish/flow.yaml
   - $resolve: ./flows/current/flow.yaml
   - $resolve: ./flows/reporting/flow.yaml
+packages:
+  adf: ingestron/provider-adf/plugin/provider.yaml@4.7.0
+  databricks: ingestron/provider-databricks/plugin/provider.yaml@3.7.0

@@ -1,5 +1,9 @@
 
 
+Unicode CLDR release-48 (time-zone mapping data)
+See UNICODE-LICENSE.txt; exact pinned provenance is under src/vendor/unicode.
+
+
 YAML (bundled parser)
 
 Copyright Eemeli Aro <eemeli@gmail.com>

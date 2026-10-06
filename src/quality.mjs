@@ -1,3 +1,4 @@
+import { temporalLiteral } from "./temporal-literals.mjs";
 /** ODCS v3.1 library quality rules as a native pre-copy check (PB-063 phase 4).
  *
  * SQL snapshot standards read a frozen extract, so one Lookup computes every rule
@@ -136,6 +137,7 @@ export function contractRules(contract) {
 /** SQL dialects of the sources ADF snapshots read (PB-064). */
 export const dialects = {
   tsql: {
+    name: "tsql",
     quote: (n) => "[" + n.replaceAll("]", "]]") + "]",
     count: "COUNT_BIG",
     ifNull: "ISNULL",
@@ -145,6 +147,7 @@ export const dialects = {
     regex: undefined,
   },
   postgres: {
+    name: "postgres",
     quote: (n) => `"${n.replaceAll('"', '""')}"`,
     count: "COUNT",
     ifNull: "COALESCE",
@@ -154,6 +157,7 @@ export const dialects = {
     regex: (c, p) => `CAST(${c} AS TEXT) !~ ${p}`,
   },
   mysql: {
+    name: "mysql",
     quote: (n) => "`" + n.replaceAll("`", "``") + "`",
     count: "COUNT",
     ifNull: "COALESCE",
@@ -163,6 +167,7 @@ export const dialects = {
     regex: (c, p) => `NOT REGEXP_LIKE(${c}, ${p})`,
   },
   oracle: {
+    name: "oracle",
     quote: (n) => `"${n.replaceAll('"', '""')}"`,
     count: "COUNT",
     ifNull: "COALESCE",
@@ -182,9 +187,13 @@ function literals(values, type, d) {
       ? [d.text(v)]
       : numeric(type) && typeof v === "number" && Number.isFinite(v)
         ? [String(v)]
-        : type === "BOOLEAN" && typeof v === "boolean"
-          ? [v ? "1" : "0"]
-          : [],
+        : ["DATE", "TIMESTAMP"].includes(type)
+          ? temporalLiteral(v, type, d)
+            ? [temporalLiteral(v, type, d)]
+            : []
+          : type === "BOOLEAN" && typeof v === "boolean"
+            ? [v ? "1" : "0"]
+            : [],
   );
 }
 
@@ -352,7 +361,6 @@ export function passingExpression(rules) {
       : [],
   );
   if (!conditions.length) return undefined;
-  return conditions.length === 1
-    ? `@${conditions[0]}`
-    : `@and(${conditions.join(", ")})`;
+  // ADF's and() accepts exactly two operands, even when a table has many rules.
+  return `@${conditions.reduce((left, right) => `and(${left}, ${right})`)}`;
 }

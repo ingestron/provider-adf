@@ -3,17 +3,25 @@
 Status: versioned standards. Generation is tested offline; native execution is
 not qualified by this repository.
 
-| Standard                  | Source kinds          | Meaning                                                                                                   |
-| ------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------- |
-| snapshot-to-databricks@v1 | azure-sql, sql-server | Frozen snapshot copy, count gate and invocation of the versioned native Databricks publisher              |
-| metadata-snapshot-land@v1 | azure-sql, sql-server | Reviewed catalogue, coordinator and reusable guarded snapshot worker                                      |
-| snapshot-land@v1          | azure-sql, sql-server | Explicit frozen full-table source, selected contract columns, Parquet landing and expected-row-count gate |
-| immutable-file-copy@v1    | adls, sftp            | One completed immutable file, binary-preserving copy into a new run folder                                |
+| Standard                  | Source kinds                                     | Meaning                                                                                                                |
+| ------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| snapshot-to-databricks@v1 | azure-sql, sql-server, postgresql, mysql, oracle | Frozen snapshot copy, count gate and invocation of the versioned native Databricks publisher                           |
+| metadata-snapshot-land@v1 | azure-sql, sql-server                            | Reviewed catalogue, coordinator and reusable guarded snapshot worker                                                   |
+| snapshot-land@v1          | azure-sql, sql-server, postgresql, mysql, oracle | Explicit frozen full-table source, selected contract columns, Parquet landing and expected-row-count gate              |
+| watermark-append-land@v1  | azure-sql, sql-server                            | Bounded ordered immutable integer-key append, quality/count gates and atomic watermark plus committed-delivery journal |
+| immutable-file-copy@v1    | adls, s3, gcs, sftp                              | One completed immutable file, binary-preserving copy into a new run folder                                             |
+
+The table describes the current private candidate. The snapshot standards use the
+source-specific SQL dialect. Read the [candidate temporal quality guide](temporal-quality.md)
+for date and clock literals. `sharepoint-list-land@v1` reads SharePoint lists;
+`app-land@v1` reads Salesforce objects or reviewed HubSpot table names. Those live
+API/list standards do not claim a frozen snapshot or required contract quality.
 
 Data Flow is forbidden for these standards; there is no silent fallback. A future
 exception needs a named standard, necessity evidence, compute/network/cost
-prerequisites and explicit opt-in. PostgreSQL, REST, watermarks, Change Tracking
-and CDC are future individually gated capabilities.
+prerequisites and explicit opt-in. Change Tracking and CDC remain separately gated
+capabilities. The candidate append standard has strict source-owner ordering
+requirements; read [its setup and recovery guide](watermark-append.md).
 
 Simple projects use the same standards as enterprise projects. Existing linked
 services own authentication and integration-runtime selection; use managed

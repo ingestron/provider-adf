@@ -1,3 +1,20 @@
+import { buildWindowsZones } from "./windows-zones-build.mjs";
+import { scheduleInputsSchema } from "../src/schedule-inputs-schema.mjs";
+import { copyFileSync } from "node:fs";
+writeFileSync(
+  "src/windows-zones.mjs",
+  "export const windowsZones = " +
+    JSON.stringify(buildWindowsZones(), null, 2) +
+    ";\n",
+);
+copyFileSync(
+  "src/vendor/unicode/UNICODE-LICENSE.txt",
+  "plugin/UNICODE-LICENSE.txt",
+);
+const configPath = "plugin/configuration.schema.json";
+const config = JSON.parse(readFileSync(configPath, "utf8"));
+config.properties.scheduleInputs = scheduleInputsSchema;
+writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 import { createHash } from "node:crypto";
 const provenance = JSON.parse(
   readFileSync("src/vendor/connectors/provenance.json", "utf8"),
@@ -64,6 +81,9 @@ const baseNotices = fsNotices.existsSync(noticesPath)
 fsNotices.writeFileSync(
   noticesPath,
   baseNotices +
+    (baseNotices.includes("Unicode CLDR release-48")
+      ? ""
+      : "\n\nUnicode CLDR release-48 (time-zone mapping data)\nSee UNICODE-LICENSE.txt; exact pinned provenance is under src/vendor/unicode.\n") +
     "\n\nYAML (bundled parser)\n\n" +
     fsNotices.readFileSync("node_modules/yaml/LICENSE", "utf8"),
 );
@@ -82,6 +102,7 @@ const { computeDefinition, poolDefinition } =
   await import("../src/compute.mjs");
 const manifestPath = "plugin/provider.yaml";
 const manifest = parse(fsNotices.readFileSync(manifestPath, "utf8"));
+manifest.capabilities.schedules = ["interval", "daily", "weekly", "monthly"];
 manifest.version = JSON.parse(
   fsNotices.readFileSync("package.json", "utf8"),
 ).version;
@@ -93,6 +114,9 @@ manifest.compatibility.requiredFeatures = [
     "project-connections",
     "odcs-connections",
     "connector-runtime-capabilities",
+    "flow-schedules",
+    "resolved-schedule-boundaries",
+    "flow-schedule-resource-claims",
   ]),
 ];
 manifest.commands.definitions = manifest.commands.definitions.filter(
@@ -141,6 +165,16 @@ manifest.commands.definitions.push({
   inputSchema: { type: "object", additionalProperties: true },
 });
 const { format } = await import("prettier");
+writeFileSync(
+  "src/windows-zones.mjs",
+  await format(readFileSync("src/windows-zones.mjs", "utf8"), {
+    parser: "babel",
+  }),
+);
+writeFileSync(
+  configPath,
+  await format(readFileSync(configPath, "utf8"), { parser: "json" }),
+);
 fsNotices.writeFileSync(
   manifestPath,
   await format(stringify(JSON.parse(JSON.stringify(manifest))), {

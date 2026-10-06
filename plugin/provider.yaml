@@ -1,6 +1,6 @@
 apiVersion: ingestron.provider/v1
 id: adf-native
-version: 4.7.0
+version: 4.10.0
 platform: adf
 compatibility:
   plan: ingestron.plan/v1
@@ -19,6 +19,9 @@ compatibility:
     - project-assembly
     - quality-capabilities
     - source-coverage
+    - flow-schedules
+    - resolved-schedule-boundaries
+    - flow-schedule-resource-claims
 sources:
   sql-server:
     route: native
@@ -28,8 +31,10 @@ sources:
       - snapshot-land@v1
       - snapshot-to-databricks@v1
       - metadata-snapshot-land@v1
+      - watermark-append-land@v1
     capabilities:
       - snapshot
+      - incremental
     reference:
       docs: https://learn.microsoft.com/azure/data-factory/connector-sql-server
       vendorStatus: ga
@@ -536,6 +541,13 @@ quality:
         duplicateValues: at-load
         rowCount: at-load
       sql: at-load
+    watermark-append-land@v1:
+      library:
+        nullValues: at-load
+        missingValues: at-load
+        invalidValues: at-load
+        duplicateValues: at-load
+        rowCount: at-load
 configurationSchema: ./configuration.schema.json
 planner:
   apiVersion: ingestron.provider-planning/v1
@@ -566,6 +578,14 @@ standards:
     dataFlow: forbidden
   - id: snapshot-to-databricks@v1
     description: Copy a frozen SQL snapshot and invoke conditional Databricks publication
+    sourceKinds:
+      - azure-sql
+      - sql-server
+    dataFlow: forbidden
+  - id: watermark-append-land@v1
+    description:
+      Bounded committed ordered immutable integer-key append with atomic
+      watermark and delivery journal
     sourceKinds:
       - azure-sql
       - sql-server
@@ -1107,6 +1127,11 @@ capabilities:
       version: 1.0.0
       activities:
         - copy
+  schedules:
+    - interval
+    - daily
+    - weekly
+    - monthly
 connectorRuntimes:
   ingestron.snapshot/python/v1:
     selectionSchema:

@@ -143,9 +143,9 @@ test("SQL snapshots check contract rules on the frozen source before Copy", () =
   assert.equal(lookup.policy.retry, 0);
   assert.equal(
     verify.typeProperties.expression.value,
-    "@and(greater(activity('CheckQuality').output.firstRow.q0, 0), " +
-      "equals(activity('CheckQuality').output.firstRow.q1, 0), " +
-      "equals(activity('CheckQuality').output.firstRow.q3, 0), " +
+    "@and(and(and(greater(activity('CheckQuality').output.firstRow.q0, 0), " +
+      "equals(activity('CheckQuality').output.firstRow.q1, 0)), " +
+      "equals(activity('CheckQuality').output.firstRow.q3, 0)), " +
       "equals(activity('CheckQuality').output.firstRow.q4, 0))",
   );
   assert.equal(
@@ -248,7 +248,7 @@ test("sql rules join the pre-copy check; engine rules are left to their engine",
   );
   assert.match(
     pipeline.activities[1].typeProperties.expression.value,
-    /^@and\(equals\(activity\('CheckQuality'\)\.output\.firstRow\.q0, 0\), /,
+    /^@and\(and\(equals\(activity\('CheckQuality'\)\.output\.firstRow\.q0, 0\), /,
   );
   for (const [query, message] of [
     ["SELECT 1; DROP TABLE x", /semicolons/],
@@ -530,4 +530,201 @@ test("file copies accept the portable path shared with connectors and Databricks
     () => location({ path: "a/b.csv", folder: "a", fileName: "b.csv" }),
     /not both/,
   );
+});
+
+test("SQL temporal library rules retain validated date and microsecond literals in all source dialects", async () => {
+  const { qualityQuery, qualityRules } = await import("../src/quality.mjs");
+  const temporalColumns = [
+    { name: "day", type: "DATE" },
+    { name: "event", type: "TIMESTAMP" },
+  ];
+  const temporalContract = {
+    schema: [
+      {
+        name: "events",
+        properties: [
+          {
+            name: "business_day",
+            physicalName: "day",
+            quality: [
+              {
+                id: "day-valid",
+                metric: "invalidValues",
+                arguments: {
+                  validValues: [
+                    "2024-02-29",
+                    "2000-02-29",
+                    "0001-01-01",
+                    "2023-02-29",
+                    "1900-02-29",
+                    "0000-01-01",
+                    "2024-02-29\n",
+                    "2024-02-29'; DROP x",
+                    null,
+                  ],
+                },
+                mustBe: 0,
+                severity: "error",
+              },
+            ],
+          },
+          {
+            name: "event_time",
+            physicalName: "event",
+            quality: [
+              {
+                id: "clock-valid",
+                metric: "invalidValues",
+                arguments: {
+                  validValues: [
+                    "2024-02-29T01:02:03.123456",
+                    "2024-02-29 01:02:03",
+                    "2024-02-29T01:02:03.1234567",
+                    "2024-02-29T01:02:03Z",
+                    "2024-02-29T01:02:03+01:00",
+                    "2024-02-29T24:02:03",
+                    "2024-02-29T01:60:03",
+                    "2024-02-29T01:02:60",
+                    "2024-02-29T01:02:03\n",
+                  ],
+                },
+                mustBe: 0,
+                severity: "error",
+              },
+              {
+                id: "clock-missing",
+                metric: "missingValues",
+                arguments: {
+                  missingValues: [
+                    "2024-02-29T01:02:03.1",
+                    "2023-02-29T01:02:03",
+                  ],
+                },
+                mustBe: 0,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const rules = qualityRules(temporalContract, temporalColumns);
+  assert.deepEqual(
+    rules.map((r) => r.column),
+    ["day", "event", "event"],
+  );
+  for (const dialect of ["tsql", "postgres", "mysql", "oracle"]) {
+    const query = qualityQuery(
+      rules,
+      temporalColumns,
+      "dbo",
+      "events",
+      dialect,
+    );
+    if (dialect === "tsql") {
+      assert.match(query, /CONVERT\(date, '20240229', 112\)/);
+      assert.match(
+        query,
+        /CONVERT\(datetime2\(6\), '2024-02-29T01:02:03.123456', 126\)/,
+      );
+      assert.match(
+        query,
+        /CONVERT\(datetime2\(6\), '2024-02-29T01:02:03.1', 126\)/,
+      );
+    } else {
+      assert.match(query, /DATE '2024-02-29'/);
+      assert.match(query, /TIMESTAMP '2024-02-29 01:02:03.123456'/);
+      assert.match(query, /TIMESTAMP '2024-02-29 01:02:03.1'/);
+    }
+    assert.doesNotMatch(
+      query,
+      /2023-02-29|1900-02-29|0000-01-01|1234567|DROP|24:02|01:60|01:02:60|\+01:00|\n/,
+    );
+    assert.equal(query.includes("0001"), dialect !== "mysql");
+    assert.match(
+      query,
+      dialect === "tsql"
+        ? /\[day\] IS NOT NULL AND \[day\] NOT IN/
+        : dialect === "mysql"
+          ? /`day` IS NOT NULL AND `day` NOT IN/
+          : /"day" IS NOT NULL AND "day" NOT IN/,
+    );
+  }
+});
+
+test("Generated ADF snapshot quality uses physical temporal source names before the mapped Copy", () => {
+  const properties = [
+    {
+      name: "business_day",
+      physicalName: "day",
+      logicalType: "date",
+      physicalType: "DATE",
+      quality: [
+        {
+          id: "day-valid",
+          metric: "invalidValues",
+          arguments: { validValues: ["2024-02-29"] },
+          mustBe: 0,
+          severity: "error",
+        },
+      ],
+    },
+    {
+      name: "event_time",
+      physicalName: "event",
+      logicalType: "timestamp",
+      physicalType: "TIMESTAMP",
+      quality: [
+        {
+          id: "clock-valid",
+          metric: "invalidValues",
+          arguments: { validValues: ["2024-02-29T01:02:03.123456"] },
+          mustBe: 0,
+          severity: "error",
+        },
+      ],
+    },
+  ];
+  const value = {
+    apiVersion: "v3.1.0",
+    kind: "DataContract",
+    id: "events",
+    version: "1.0.0",
+    status: "draft",
+    schema: [
+      {
+        name: "events",
+        logicalType: "object",
+        physicalType: "table",
+        properties,
+      },
+    ],
+  };
+  const temporalColumns = properties.map((p) => ({
+    name: p.physicalName,
+    target: p.name,
+    type: p.physicalType,
+    required: false,
+    key: false,
+  }));
+  const w = expand({
+    flow: flow("snapshot-land@v1", value),
+    providerSource: "adf",
+    columns: { customers: temporalColumns },
+  }).steps[0].with;
+  const p = plan(w);
+  p.nodes[0].columns = temporalColumns;
+  validate(p);
+  const activities =
+    render(p)["pipelines/retail_source_customers.json"].value.properties
+      .activities;
+  assert.match(
+    activities[0].typeProperties.source.sqlReaderQuery,
+    /\[event\] IS NOT NULL AND \[event\] NOT IN \(CONVERT\(datetime2\(6\), '2024-02-29T01:02:03.123456', 126\)\)/,
+  );
+  assert.equal(activities[2].dependsOn[0].activity, "VerifyQuality");
+  assert.deepEqual(activities[2].typeProperties.translator.mappings, [
+    { source: { name: "day" }, sink: { name: "business_day" } },
+    { source: { name: "event" }, sink: { name: "event_time" } },
+  ]);
 });

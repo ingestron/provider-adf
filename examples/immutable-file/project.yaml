@@ -1,10 +1,6 @@
 apiVersion: ingestron.project/v1
 id: retail
 providers:
-  packages:
-    adf:
-      source: adf
-      version: 2.3.1
   configurations:
     landing:
       package: adf
@@ -65,3 +61,5 @@ flows:
                 - name: name
                   logicalType: string
                   physicalType: STRING
+packages:
+  adf: ingestron/provider-adf/plugin/provider.yaml@4.7.0
