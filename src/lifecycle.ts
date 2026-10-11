@@ -1,3 +1,4 @@
+import { bindPlatform } from "./platform-binding.mjs";
 import { verifyAdfScheduleOwnership } from "./schedule-ownership.mjs";
 import { watermarkStandard } from "./watermark.mjs";
 import { metadataStandard, metadataNames } from "./metadata.mjs";
@@ -146,6 +147,8 @@ export function validateOutput(request: any) {
 }
 export function author(request: any) {
   const { options } = request;
+  if (request.operation === "platform_binding")
+    return { files: { "binding.yaml": stringify(bindPlatform(options)) } };
   if (request.operation === "initialise") {
     const files: any = {
       "project.yaml": stringify({

@@ -102,6 +102,14 @@ const { computeDefinition, poolDefinition } =
   await import("../src/compute.mjs");
 const manifestPath = "plugin/provider.yaml";
 const manifest = parse(fsNotices.readFileSync(manifestPath, "utf8"));
+const { platformBinding } = await import("../src/platform-binding.mjs");
+manifest.platformBinding = platformBinding;
+manifest.compatibility.requiredFeatures = [
+  ...new Set([
+    ...manifest.compatibility.requiredFeatures,
+    "programme-platform-binding",
+  ]),
+];
 manifest.capabilities.schedules = ["interval", "daily", "weekly", "monthly"];
 manifest.version = JSON.parse(
   fsNotices.readFileSync("package.json", "utf8"),

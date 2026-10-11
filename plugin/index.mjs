@@ -2500,8 +2500,12 @@ var appSources = {
 };
 
 // src/index.mjs
-var check4 = (ok, message) => {
-  if (!ok) throw new Error(message);
+var check4 = (ok, message, reason) => {
+  if (!ok) {
+    const error = new Error(message);
+    if (reason) error.reason = reason;
+    throw error;
+  }
 };
 var ident2 = (v) => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v);
 var sqlTable = (v) => typeof v === "string" && v.length <= 128 && /^[A-Za-z_][A-Za-z0-9_]*(?: [A-Za-z0-9_]+)*$/.test(v);
@@ -2805,7 +2809,8 @@ function validate(plan) {
       );
       check4(
         s.consistency === "frozen-extract",
-        "Snapshot source must remain immutable throughout extraction and retries; mutable live-table reads are not complete snapshots"
+        "Snapshot source must remain immutable throughout extraction and retries; mutable live-table reads are not complete snapshots",
+        "SOURCE_CONSISTENCY"
       );
       check4(
         resource3(s.linkedService) && ident2(s.schema) && sqlTable(s.table),

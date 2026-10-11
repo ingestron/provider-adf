@@ -205,3 +205,12 @@ test("native SQL Copy preserves simultaneous mappings and rejects case-ambiguous
   p.nodes[0].columns[1].name = "ID";
   assert.throws(() => validate(p), /case-ambiguous/);
 });
+
+test("missing snapshot consistency has a bounded recovery reason", () => {
+  const p = plan();
+  delete p.nodes[0].source.consistency;
+  assert.throws(
+    () => validate(p),
+    (error) => error.reason === "SOURCE_CONSISTENCY",
+  );
+});

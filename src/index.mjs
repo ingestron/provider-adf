@@ -14,8 +14,12 @@ import { validatePublication, publicationPipeline } from "./publication.mjs";
 import { sqlSources, sqlKinds, selectQuery } from "./sql-sources.mjs";
 import { qualityRules, qualityQuery, passingExpression } from "./quality.mjs";
 import { appSources } from "./app-sources.mjs";
-const check = (ok, message) => {
-  if (!ok) throw new Error(message);
+const check = (ok, message, reason) => {
+  if (!ok) {
+    const error = new Error(message);
+    if (reason) error.reason = reason;
+    throw error;
+  }
 };
 const ident = (v) =>
   typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v);
@@ -373,6 +377,7 @@ export function validate(plan) {
       check(
         s.consistency === "frozen-extract",
         "Snapshot source must remain immutable throughout extraction and retries; mutable live-table reads are not complete snapshots",
+        "SOURCE_CONSISTENCY",
       );
       check(
         resource(s.linkedService) && ident(s.schema) && sqlTable(s.table),

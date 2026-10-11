@@ -22,6 +22,7 @@ compatibility:
     - flow-schedules
     - resolved-schedule-boundaries
     - flow-schedule-resource-claims
+    - programme-platform-binding
 sources:
   sql-server:
     route: native
@@ -1217,3 +1218,15 @@ connectorRuntimes:
 projectAssembly:
   apiVersion: ingestron.project-assembly/v1
   command: project assemble
+platformBinding:
+  apiVersion: ingestron.platform-binding-authoring/v1
+  resourcesSchema:
+    type: object
+    additionalProperties: false
+    required:
+      - factoryName
+    properties:
+      factoryName:
+        type: string
+        pattern: ^[A-Za-z_][A-Za-z0-9_-]{0,100}$
+        title: Existing ADF factory name
