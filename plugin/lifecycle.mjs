@@ -1,3 +1,287 @@
+// src/file-handoff.mjs
+function authorFileHandoff(o) {
+  if (!/^[A-Za-z_][\w-]{0,65}$/.test(o.id) || !o.tables?.length || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(o.container))
+    throw Error("Choose reviewed Azure Blob files and a container");
+  const tables = {};
+  for (const t of o.tables) {
+    if (!/^[A-Za-z_][\w-]*$/.test(t.id) || !["json", "csv"].includes(t.format) || !t.path.endsWith("." + t.format) || !t.path.split("/").every((p) => /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(p)))
+      throw Error(
+        "Handoff supports exact JSON/CSV files without wildcards or traversal"
+      );
+    tables[t.id] = {
+      source: {
+        kind: "azure-blob",
+        linkedService: "design_blob_source",
+        container: o.container,
+        path: t.path,
+        format: t.format,
+        completion: "immutable"
+      },
+      contract: t.contract
+    };
+  }
+  return {
+    flow: {
+      apiVersion: "ingestron.flow/v1",
+      id: o.id,
+      kind: "ingestion",
+      provider: o.provider,
+      description: `Design handoff from ${o.origin}; verify immutable files, linked services and completed-batch orchestration before deployment.`,
+      ingestion: {
+        standard: "immutable-file-copy@v1",
+        target: {
+          linkedService: "design_landing",
+          fileSystem: "design-landing",
+          path: o.id
+        },
+        handover: { binding: o.binding }
+      },
+      tables
+    },
+    bindings: { [o.binding]: { kind: "adls", accountName: "designlanding" } }
+  };
+}
+
+// src/platform-binding.mjs
+var factoryPattern = "^[A-Za-z_][A-Za-z0-9_-]{0,100}$";
+function bindPlatform({ profile, resources, projectId, environment }) {
+  if (profile.authentication !== "azure-cli" || profile.secrets.length)
+    throw Error(
+      "This offline binding supports Azure CLI authentication without copied secret references; review other identity methods separately."
+    );
+  if (profile.purpose === "production")
+    throw Error(
+      "Production needs reviewed run identity, permissions and operational settings before binding."
+    );
+  if (Object.keys(resources).some((key) => key !== "factoryName") || typeof resources.factoryName !== "string" || !new RegExp(factoryPattern).test(resources.factoryName))
+    throw Error(
+      "Choose an existing factory name. This generation binding accepts only factoryName; deployment scope and identity settings require separate support."
+    );
+  if (![projectId, environment].every(
+    (value) => typeof value === "string" && /^[A-Za-z_][A-Za-z0-9_-]{0,79}$/.test(value)
+  ))
+    throw Error("Invalid project or environment identity.");
+  return {
+    apiVersion: "ingestron.provider-binding/v1",
+    binding: { kind: "adf", factoryName: resources.factoryName },
+    options: {},
+    ownership: "The existing factory, linked services and integration runtimes remain externally owned. Generated pipelines and datasets are scoped by project, flow and table; binding creates or deploys no resources.",
+    pendingIntent: [
+      "Flow standards, naming and quality are reviewed when defining the deliverable; resource binding alone does not apply them.",
+      "Subscription, resource group, connectivity, permissions and deployment authority require separate review before native execution."
+    ]
+  };
+}
+
+// src/schedule-ownership.mjs
+var check = (value, message) => {
+  if (!value) throw Error(message);
+};
+var canonical = (value) => JSON.stringify(sort(value));
+var sort = (value) => Array.isArray(value) ? value.map(sort) : value && typeof value === "object" ? Object.fromEntries(
+  Object.keys(value).sort().map((key) => [key, sort(value[key])])
+) : value;
+var same = (a, b, message) => check(canonical(a) === canonical(b), message);
+var window = (definition) => "@" + (definition.end ? `and(greaterOrEquals(ticks(pipeline().parameters.scheduledTime),ticks('${definition.start}')),less(ticks(pipeline().parameters.scheduledTime),ticks('${definition.end}')))` : `greaterOrEquals(ticks(pipeline().parameters.scheduledTime),ticks('${definition.start}'))`);
+function verifyAdfScheduleOwnership(files, template, input) {
+  const triggerFiles = Object.keys(files).filter(
+    (name) => name.startsWith("triggers/") && name.endsWith(".json")
+  );
+  const armTriggers = template.resources.filter(
+    (resource) => resource.type === "Microsoft.DataFactory/factories/triggers"
+  );
+  if (!files["adf-schedules.json"]) {
+    check(
+      !triggerFiles.length && !armTriggers.length,
+      "ADF triggers need an owned schedule manifest"
+    );
+    return;
+  }
+  const manifest = JSON.parse(files["adf-schedules.json"]);
+  check(
+    manifest.apiVersion === "ingestron.adf-schedules/v1" && manifest.project === input.project && manifest.execution === "not-run" && manifest.clock === "native-unqualified" && /^[a-f0-9]{64}$/.test(manifest.planDigest ?? "") && Array.isArray(manifest.schedules) && manifest.schedules.length,
+    "Invalid ADF schedule ownership manifest"
+  );
+  const seen = /* @__PURE__ */ new Set(), flows = /* @__PURE__ */ new Set();
+  const native = (kind, name) => {
+    const file = `${kind}/${name}.json`;
+    check(
+      typeof files[file] === "string",
+      "Missing owned ADF resource " + file
+    );
+    const value = JSON.parse(files[file]);
+    check(value.name === name, "Moved ADF resource " + file);
+    const arm = template.resources.filter(
+      (resource) => resource.type === `Microsoft.DataFactory/factories/${kind}` && resource.name === `[concat(parameters('factoryName'), '/${name}')]`
+    );
+    check(
+      arm.length === 1,
+      "Missing or duplicate ARM schedule resource " + name
+    );
+    same(
+      arm[0].properties,
+      value.properties,
+      "ARM resource differs from its owned native file: " + name
+    );
+    return { properties: value.properties, arm: arm[0] };
+  };
+  for (const entry of manifest.schedules) {
+    check(
+      !flows.has(entry.flow) && input.scope.flows.includes(entry.flow),
+      "Schedule claims a foreign or repeated flow"
+    );
+    flows.add(entry.flow);
+    check(
+      entry.status === "not-created" && entry.activationIntent === (entry.definition.enabled ? "Started" : "Stopped"),
+      "ADF activation intent was altered"
+    );
+    check(
+      entry.boundaries?.start?.instant === entry.definition.start && entry.boundaries?.end?.instant === entry.definition.end,
+      "Schedule boundary ownership mismatch"
+    );
+    check(
+      Array.isArray(entry.tables) && entry.tables.length > 0 && new Set(entry.tables).size === entry.tables.length && entry.tables.every(
+        (id3) => id3.startsWith(entry.flow + "/") && id3.split("/").length === 2
+      ),
+      "Schedule table ownership mismatch"
+    );
+    const name = `${input.project}_${entry.flow}_schedule_dispatch`;
+    check(
+      entry.dispatch.name === name && entry.dispatch.file === `pipelines/${name}.json`,
+      "Foreign schedule dispatcher"
+    );
+    const dispatch = native("pipelines", name);
+    same(
+      dispatch.properties,
+      entry.dispatch.properties,
+      "Dispatcher differs from reviewed schedule manifest"
+    );
+    const guard = dispatch.properties.activities?.[0];
+    check(
+      guard?.name === "CheckScheduleWindow" && guard.type === "IfCondition" && guard.typeProperties.expression.value === window(entry.definition) && guard.typeProperties.ifFalseActivities.length === 1 && guard.typeProperties.ifFalseActivities[0].type === "Fail",
+      "Schedule UTC boundary guard changed"
+    );
+    const references = [];
+    const walk = (activities, selector) => {
+      for (const activity of activities ?? []) {
+        if (activity.type === "ExecutePipeline")
+          references.push({
+            name: activity.typeProperties.pipeline.referenceName,
+            parameters: activity.typeProperties.parameters,
+            selector
+          });
+        const properties = activity.typeProperties ?? {};
+        walk(properties.activities, selector);
+        walk(properties.ifTrueActivities, selector);
+        walk(properties.ifFalseActivities, selector);
+        walk(properties.defaultActivities, selector);
+        for (const branch of properties.cases ?? [])
+          walk(branch.activities, branch.value);
+      }
+    };
+    walk(dispatch.properties.activities);
+    same(
+      [...new Set(references.map((reference) => reference.name))].sort(),
+      [...entry.targets].sort(),
+      "Schedule targets differ from dispatch references"
+    );
+    const covered = [];
+    for (const reference of references) {
+      const pipeline = native("pipelines", reference.name).properties;
+      if (reference.name.startsWith(input.project + "_md_") && reference.name.endsWith("_run")) {
+        check(
+          pipeline.parameters?.tables?.type === "Array" && pipeline.parameters?.expectedCounts?.type === "Object" && Array.isArray(reference.parameters?.tables),
+          "Schedule cannot directly invoke a metadata worker"
+        );
+        const catalogue = JSON.parse(pipeline.variables.catalogue.defaultValue);
+        for (const id3 of reference.parameters.tables) {
+          check(
+            entry.tables.includes(id3) && catalogue[id3],
+            "Metadata schedule invokes a foreign table"
+          );
+          covered.push(id3);
+        }
+      } else {
+        check(
+          entry.tables.includes(reference.selector) && reference.name === input.project + "_" + reference.selector.replace("/", "_"),
+          "Schedule invokes an unowned table or recovery pipeline"
+        );
+        check(
+          pipeline.activities.some(
+            (activity) => activity.type === "Copy" || activity.name === "ReadWatermark"
+          ),
+          "Schedule target is not a primary ingestion pipeline"
+        );
+        covered.push(reference.selector);
+      }
+    }
+    same(
+      covered.sort(),
+      [...entry.tables].sort(),
+      "Schedule must dispatch each owned table exactly once"
+    );
+    same(
+      dispatch.arm.dependsOn.filter((value) => value.includes("factories/pipelines")).sort(),
+      entry.targets.map(
+        (target) => `[resourceId('Microsoft.DataFactory/factories/pipelines', parameters('factoryName'), '${target}')]`
+      ).sort(),
+      "Schedule primary pipeline dependencies changed"
+    );
+    check(
+      Array.isArray(entry.triggers) && entry.triggers.length > 0,
+      "Missing owned schedule triggers"
+    );
+    for (const trigger of entry.triggers) {
+      check(
+        !seen.has(trigger.file) && trigger.file === `triggers/${trigger.name}.json` && trigger.name.startsWith(`${input.project}_${entry.flow}_schedule_`),
+        "Foreign or repeated trigger file"
+      );
+      seen.add(trigger.file);
+      const actual = native("triggers", trigger.name);
+      same(
+        actual.properties,
+        trigger.properties,
+        "Trigger differs from reviewed schedule manifest"
+      );
+      check(
+        Object.keys(actual.properties).every(
+          (key) => ["type", "typeProperties", "pipelines"].includes(key)
+        ) && actual.properties.type === "ScheduleTrigger",
+        "Unsupported trigger activation fields"
+      );
+      same(
+        actual.properties.pipelines,
+        [
+          {
+            pipelineReference: {
+              type: "PipelineReference",
+              referenceName: name
+            },
+            parameters: { scheduledTime: "@trigger().scheduledTime" }
+          }
+        ],
+        "Trigger invokes a foreign pipeline or changes scheduled occurrence identity"
+      );
+      same(
+        actual.arm.dependsOn,
+        [
+          `[resourceId('Microsoft.DataFactory/factories/pipelines', parameters('factoryName'), '${name}')]`
+        ],
+        "Trigger dependency ownership changed"
+      );
+    }
+  }
+  same(
+    [...seen].sort(),
+    triggerFiles.sort(),
+    "Unowned or missing native trigger files"
+  );
+  check(armTriggers.length === seen.size, "Unowned ARM schedule triggers");
+}
+
+// src/watermark.mjs
+var watermarkStandard = "watermark-append-land@v1";
+
 // src/metadata.mjs
 var metadataStandard = "metadata-snapshot-land@v1";
 function metadataNames(project, group) {
@@ -6281,7 +6565,7 @@ function stringify3(value, replacer, options) {
 }
 
 // src/project-assembly.mjs
-var check = (v, m) => {
+var check2 = (v, m) => {
   if (!v) throw Error(m);
 };
 var prefix = (i) => [
@@ -6293,11 +6577,11 @@ var prefix = (i) => [
 function assemble(input) {
   const name = prefix(input);
   if (input.phase === "configure") {
-    check(
+    check2(
       input.execution.mode === "adf-batch",
       "ADF external execution requires Batch"
     );
-    check(
+    check2(
       !input.execution.compute.factoryName || input.binding?.factoryName === input.execution.compute.factoryName,
       "Execution factory must match the configured provider binding"
     );
@@ -6313,10 +6597,10 @@ function assemble(input) {
       }
     };
   }
-  check(input.phase === "assemble", "Unknown project assembly phase");
+  check2(input.phase === "assemble", "Unknown project assembly phase");
   const artifacts = { ...input.nativeFiles };
   const put = (file, value) => {
-    check(
+    check2(
       !Object.hasOwn(artifacts, file) || artifacts[file] === value,
       "Conflicting project asset: " + file
     );
@@ -6327,6 +6611,7 @@ function assemble(input) {
     contentVersion: "1.0.0.0",
     resources: []
   };
+  verifyAdfScheduleOwnership(artifacts, template, input);
   const resources = /* @__PURE__ */ new Map();
   const key = (r) => {
     const match = /^\[concat\(parameters\('factoryName'\), '\/([^']+)'\)\]$/.exec(r.name);
@@ -6334,7 +6619,7 @@ function assemble(input) {
   };
   const add = (r) => {
     const old = resources.get(key(r));
-    check(
+    check2(
       !old || JSON.stringify(old) === JSON.stringify(r),
       "Conflicting shared ADF resource: " + r.name
     );
@@ -6345,7 +6630,7 @@ function assemble(input) {
   for (const c of input.connections) {
     const config = JSON.parse(c.artifacts["connector.json"]);
     const compute = config.projectLock.execution.compute;
-    check(
+    check2(
       compute.factoryName === input.binding.factoryName,
       "Mixed factories in one target"
     );
@@ -6369,7 +6654,7 @@ function assemble(input) {
   }
   let index = 0;
   for (const { base, entries } of groups.values()) {
-    check(
+    check2(
       entries.length <= 25,
       "A shared Batch worker supports at most 25 compiled workloads; split execution configurations"
     );
@@ -6650,7 +6935,7 @@ function batchRest(b, storageAccount, files, timeout = "00.01:00:00", workload =
 }
 
 // src/compute.mjs
-var check2 = (v, m) => {
+var check3 = (v, m) => {
   if (!v) throw new Error(m);
 };
 var safe = (v) => typeof v === "string" && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,100}$/.test(v);
@@ -6671,47 +6956,47 @@ function computePrepare(input) {
     "pollIntervalSeconds",
     "recovery"
   ];
-  check2(
+  check3(
     input && Object.keys(input).every((k) => keys.includes(k)),
     "Unsupported compute setting"
   );
-  check2(
+  check3(
     typeof input.factoryName === "string" && /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(input.factoryName) && input.factoryName.length >= 3 && input.factoryName.length <= 63,
     "Invalid factory"
   );
-  check2(
+  check3(
     safe(input.pipelineName) && safe(input.poolName) && input.poolName.length <= 64,
     "Invalid pipeline or pool"
   );
-  check2(
+  check3(
     /^https:\/\/[a-z0-9]+\.[a-z0-9]+\.batch\.azure\.com$/.test(
       input.batchAccountUrl
     ),
     "Invalid Batch endpoint"
   );
-  check2(
+  check3(
     /^\/subscriptions\/[a-f0-9-]{36}\/resourcegroups\/[A-Za-z0-9_.()-]+\/providers\/Microsoft.ManagedIdentity\/userAssignedIdentities\/[A-Za-z0-9_-]+$/i.test(
       input.workerIdentityResourceId
     ),
     "Use an existing worker identity"
   );
-  check2(
+  check3(
     /^[a-z0-9]{3,24}$/.test(input.storageAccount) && typeof input.resourceFolder === "string" && input.resourceFolder.split("/").every(safe),
     "Invalid asset location"
   );
-  check2(
+  check3(
     Array.isArray(input.files) && input.files.length > 0 && input.files.length <= 100 && input.files.every(safe) && new Set(input.files).size === input.files.length,
     "Invalid resource files"
   );
-  check2(
+  check3(
     input.recovery === "idempotent-checkpoint-commit-v1",
     "Workload must implement reviewed checkpoint/commit recovery before Spot use"
   );
-  check2(
+  check3(
     Number.isInteger(input.pollIntervalSeconds) && input.pollIntervalSeconds >= 15 && input.pollIntervalSeconds <= 900,
     "Explicit polling interval required (15\u2013900 seconds)"
   );
-  check2(typeof input.timeout === "string", "Explicit timeout required");
+  check3(typeof input.timeout === "string", "Explicit timeout required");
   const properties = batchRest(
     input,
     input.storageAccount,
@@ -6797,7 +7082,7 @@ var computeDefinition = {
   }
 };
 function spotPoolPolicy(maxNodes) {
-  check2(
+  check3(
     Number.isInteger(maxNodes) && maxNodes >= 1 && maxNodes <= 100,
     "Explicit maximum Spot nodes required"
   );
@@ -6811,7 +7096,7 @@ $NodeDeallocationOption = taskcompletion;`
   };
 }
 function poolPrepare(input) {
-  check2(
+  check3(
     input && Object.keys(input).length === 1 && Object.hasOwn(input, "maxNodes"),
     "Supply only maxNodes"
   );
@@ -6829,24 +7114,24 @@ function poolPrepare(input) {
 }
 
 // src/vendor/connectors/connector-contract-export.mjs
-var check3 = (value, message) => {
+var check4 = (value, message) => {
   if (!value) throw Error(message);
 };
 var safe2 = (v) => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,100}$/.test(v);
 function connectorContracts(input) {
-  check3(
+  check4(
     input && Object.keys(input).length === 1 && input.review?.apiVersion === "ingestron.singer-review/v1",
     "Supply one Singer review bundle"
   );
-  check3(
+  check4(
     input.review.status === "approved",
     "Approve the reviewed projection first"
   );
   const entries = Object.entries(input.review.contracts ?? {});
-  check3(entries.length >= 1 && entries.length <= 100, "Select 1\u2013100 contracts");
+  check4(entries.length >= 1 && entries.length <= 100, "Select 1\u2013100 contracts");
   const artifacts = {};
   for (const [name, contract] of entries) {
-    check3(
+    check4(
       safe2(name) && contract?.apiVersion === "v3.1.0" && typeof contract.id === "string",
       "Invalid ODCS contract identity"
     );
@@ -6864,12 +7149,12 @@ function connectorContracts(input) {
 }
 
 // src/connectors.mjs
-var check4 = (v, m) => {
+var check5 = (v, m) => {
   if (!v) throw Error(m);
 };
 var safe3 = (v) => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,100}$/.test(v);
 function connectorPrepare(input, projectFiles = [], runtimeAssets) {
-  check4(
+  check5(
     input && Object.keys(input).every(
       (k) => [
         "connector",
@@ -6884,23 +7169,23 @@ function connectorPrepare(input, projectFiles = [], runtimeAssets) {
     ),
     "Unsupported connector setting"
   );
-  check4(
+  check5(
     runtimeAssets && typeof runtimeAssets === "object",
     "Select an exact prepared connector; unresolved catalogue entries cannot be packaged"
   );
-  check4(
+  check5(
     input.mode === "customer-operated",
     "Only customer-operated mode is implemented"
   );
-  check4(
+  check5(
     safe3(input.sourceId) && safe3(input.tenantId),
     "Explicit source and tenant identities required"
   );
-  check4(
+  check5(
     typeof input.configEnv === "string" && /^[A-Z][A-Z0-9_]{0,100}$/.test(input.configEnv),
     "Use an environment variable reference, never credentials"
   );
-  check4(
+  check5(
     Number.isInteger(input.timeoutSeconds) && input.timeoutSeconds >= 1 && input.timeoutSeconds <= 604800,
     "Explicit bounded timeout required"
   );
@@ -6915,18 +7200,18 @@ function connectorPrepare(input, projectFiles = [], runtimeAssets) {
     reviewFile: "review.json"
   };
   const artifacts = { ...runtimeAssets };
-  check4(
+  check5(
     JSON.parse(artifacts["runtime.lock.json"]).connector === input.connector,
     "Runtime connector mismatch"
   );
   let compute;
   {
-    check4(
+    check5(
       input.azure && input.compute,
       "Azure execution requires destination and compute references"
     );
     const a = input.azure;
-    check4(
+    check5(
       Object.keys(a).sort().join(",") === [
         "storageAccount",
         "container",
@@ -6937,30 +7222,30 @@ function connectorPrepare(input, projectFiles = [], runtimeAssets) {
       ].sort().join(","),
       "Unsupported Azure setting"
     );
-    check4(
+    check5(
       /^[a-z0-9]{3,24}$/.test(a.storageAccount) && /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(a.container),
       "Invalid storage destination"
     );
-    check4(
+    check5(
       typeof a.prefix === "string" && a.prefix.split("/").every(safe3),
       "Unsafe Blob prefix"
     );
-    check4(
+    check5(
       /^https:\/\/[a-zA-Z0-9-]+\.vault\.azure\.net$/.test(a.vaultUrl) && /^[A-Za-z0-9-]{1,127}$/.test(a.configSecret),
       "Use a Key Vault secret reference"
     );
-    check4(
+    check5(
       /^[a-fA-F0-9-]{36}$/.test(a.identityClientId),
       "Explicit managed identity client ID required"
     );
     config.azure = a;
-    check4(
+    check5(
       !["files", "entryPoint", "configFile", "recovery"].some(
         (k) => k in input.compute
       ),
       "Connector wrapper owns workload files and entry point"
     );
-    check4(
+    check5(
       typeof input.compute.pythonExecutable === "string",
       "Select a preinstalled isolated Python environment for this connector"
     );
@@ -6976,7 +7261,7 @@ function connectorPrepare(input, projectFiles = [], runtimeAssets) {
       configFile: "connector.json",
       recovery: "idempotent-checkpoint-commit-v1"
     });
-    check4(
+    check5(
       input.compute.storageAccount === a.storageAccount,
       "Asset and data storage account must match in this preview"
     );
@@ -8041,15 +8326,15 @@ var fileFormats = [
   "xml",
   "xlsx"
 ];
-var check5 = (v, m) => {
+var check6 = (v, m) => {
   if (!v) throw Error(m);
 };
 var id2 = (v) => typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(v);
 var path = (v) => typeof v === "string" && v.length <= 512 && /^[A-Za-z0-9_./= -]+$/.test(v) && v.split("/").every((p) => p !== "." && p !== ".." && p !== "");
 function sourcePrepare(input) {
-  check5(id2(input.sourceId), "Use a simple sourceId");
+  check6(id2(input.sourceId), "Use a simple sourceId");
   if (input.sourceKind === "azure-sql") {
-    check5(
+    check6(
       !input.format && !input.datasets && !input.sampleRows,
       "SQL uses explicit catalogue schemas/tables, not file settings"
     );
@@ -8077,48 +8362,48 @@ function sourcePrepare(input) {
       applied: false
     };
   }
-  check5(
+  check6(
     input.sourceKind === "adls" && fileFormats.includes(input.format),
     "Select adls and a supported file format"
   );
-  check5(
+  check6(
     !input.schemas && !input.tables,
     "Files use explicit datasets, not catalogue schemas/tables"
   );
-  check5(
+  check6(
     Array.isArray(input.datasets) && input.datasets.length > 0 && input.datasets.length <= 100,
     "Select 1\u2013100 datasets"
   );
   const names = /* @__PURE__ */ new Set();
   for (const d of input.datasets) {
-    check5(
+    check6(
       id2(d.name) && !names.has(d.name),
       "Dataset names must be unique simple identifiers"
     );
     names.add(d.name);
-    check5(
+    check6(
       Array.isArray(d.paths) && d.paths.length > 0 && d.paths.length <= 100 && d.paths.every(path) && new Set(d.paths).size === d.paths.length,
       "Select unique safe explicit file paths"
     );
-    check5(
+    check6(
       d.paths.every((p) => p.toLowerCase().endsWith("." + input.format)),
       "File extension must match format"
     );
-    check5(
+    check6(
       input.format === "xlsx" ? d.paths.length === 1 && id2(d.sheet) : d.sheet === void 0,
       "XLSX requires one file and explicit simple worksheet; sheet applies only to XLSX"
     );
-    check5(
+    check6(
       !d.partitionColumns || input.format === "parquet" && d.partitionColumns.every(id2) && new Set(d.partitionColumns).size === d.partitionColumns.length,
       "Explicit partitions apply only to Parquet"
     );
   }
-  check5(
+  check6(
     input.datasets.reduce((n, d) => n + d.paths.length, 0) <= 200,
     "At most 200 selected file reads"
   );
   const sampleRows = input.sampleRows ?? 1e3;
-  check5(
+  check6(
     Number.isInteger(sampleRows) && sampleRows >= 1 && sampleRows <= 1e4,
     "sampleRows must be 1\u201310000"
   );
@@ -8133,7 +8418,7 @@ function sourcePrepare(input) {
   };
 }
 function property(c, depth = 0) {
-  check5(
+  check6(
     depth <= 8 && id2(c.name) && typeof c.nullable === "boolean",
     "Invalid column name, depth or nullability"
   );
@@ -8147,15 +8432,15 @@ function property(c, depth = 0) {
     object: ["STRUCT"],
     array: ["ARRAY"]
   };
-  check5(
+  check6(
     types2[c.logicalType] && (types2[c.logicalType].includes(c.physicalType) || c.logicalType === "number" && /^DECIMAL\((\d{1,2}),(\d{1,2})\)$/.test(c.physicalType)),
     "Unsupported discovered type"
   );
   if (c.physicalType.startsWith("DECIMAL")) {
     const [p, s] = c.physicalType.match(/\d+/g).map(Number);
-    check5(p >= 1 && p <= 38 && s <= p, "Invalid decimal");
+    check6(p >= 1 && p <= 38 && s <= p, "Invalid decimal");
   }
-  check5(
+  check6(
     [
       "sampled-values",
       "declared-parquet-schema",
@@ -8171,46 +8456,46 @@ function property(c, depth = 0) {
     description: `Discovery evidence: ${c.evidence}. Sample absence of nulls does not establish requiredness.${c.warning ? " " + c.warning : ""}`
   };
   if (c.logicalType === "object") {
-    check5(
+    check6(
       Array.isArray(c.properties) && c.properties.length > 0,
       "Object properties required"
     );
     out.properties = c.properties.map((x) => property(x, depth + 1));
-    check5(
+    check6(
       new Set(out.properties.map((p) => p.name)).size === out.properties.length,
       "Duplicate nested property"
     );
   }
   if (c.logicalType === "array") {
-    check5(c.items, "Array item metadata required");
+    check6(c.items, "Array item metadata required");
     out.items = property(c.items, depth + 1);
     delete out.items.name;
   }
   return out;
 }
 function fileContracts(input) {
-  check5(
+  check6(
     input.apiVersion === "ingestron.file-metadata/v1" && id2(input.sourceId) && input.sourceKind === "adls" && fileFormats.includes(input.format),
     "Unsupported file metadata envelope"
   );
-  check5(
+  check6(
     Array.isArray(input.datasets) && input.datasets.length > 0 && input.datasets.length <= 100,
     "Expected 1\u2013100 datasets"
   );
   const artifacts = {}, review = [];
   for (const d of input.datasets) {
-    check5(
+    check6(
       id2(d.name) && Array.isArray(d.files) && d.files.length > 0 && d.files.every((f) => path(f.path) && /^[a-f0-9]{64}$/.test(f.sha256)),
       "Invalid dataset file identity"
     );
-    check5(
+    check6(
       Array.isArray(d.columns) && d.columns.length > 0 && d.columns.length <= 200,
       "Expected bounded columns"
     );
     const key = input.sourceId + "__" + d.name;
-    check5(!artifacts[key + ".odcs.json"], "Duplicate dataset");
+    check6(!artifacts[key + ".odcs.json"], "Duplicate dataset");
     const properties = d.columns.map((c) => property(c));
-    check5(
+    check6(
       new Set(properties.map((p) => p.name)).size === properties.length,
       "Duplicate columns"
     );
@@ -8369,10 +8654,20 @@ function inspect(artifact, context) {
       require3([
         "Microsoft.DataFactory/factories/pipelines",
         "Microsoft.DataFactory/factories/datasets",
-        "Microsoft.DataFactory/factories/linkedservices"
+        "Microsoft.DataFactory/factories/linkedservices",
+        "Microsoft.DataFactory/factories/triggers"
       ].includes(
         resource.type
-      ), "Only explicit ADF pipeline, dataset and linked-service resources are supported");
+      ), "Only explicit ADF pipeline, dataset, linked-service and schedule-trigger resources are supported");
+      if (resource.type === "Microsoft.DataFactory/factories/triggers") {
+        const properties = resource.properties, recurrence = properties?.typeProperties?.recurrence;
+        require3(properties?.type === "ScheduleTrigger" && recurrence && ["Minute", "Hour", "Day", "Week", "Month"].includes(
+          recurrence.frequency
+        ) && Number.isInteger(recurrence.interval) && recurrence.interval >= 1 && recurrence.interval <= 1e3 && typeof recurrence.startTime === "string" && typeof recurrence.timeZone === "string", "Inspect only explicit native ScheduleTrigger recurrences");
+        require3(Array.isArray(properties.pipelines) && properties.pipelines.length > 0 && properties.pipelines.every(
+          (pipeline) => pipeline.pipelineReference?.type === "PipelineReference" && typeof pipeline.pipelineReference.referenceName === "string" && pipeline.parameters && typeof pipeline.parameters === "object" && !Array.isArray(pipeline.parameters)
+        ), "Schedule trigger pipelines require explicit references and parameters");
+      }
       const identity = resource.type + ":" + resource.name;
       require3(!names.has(identity), "Duplicate resource identity");
       names.add(identity);
@@ -8405,7 +8700,7 @@ function inspect(artifact, context) {
 }
 
 // src/lifecycle.ts
-var check6 = (ok, message) => {
+var check7 = (ok, message) => {
   if (!ok) throw new Error(message);
 };
 function model(request) {
@@ -8437,29 +8732,76 @@ function model(request) {
       }))
     );
   }
+  if (w.standard === watermarkStandard)
+    resources.push(
+      {
+        scope: binding.factoryName,
+        kind: "dataset",
+        name: name + "_control"
+      },
+      {
+        scope: binding.factoryName,
+        kind: "pipeline",
+        name: name + "_batch"
+      }
+    );
+  const schedule = request.flowContext?.schedule;
+  if (schedule && request.flowContext.tableIds[0] === n.table) {
+    const prefix2 = `${request.project}_${n.flow}_schedule`;
+    resources.push({
+      scope: binding.factoryName,
+      kind: "pipeline",
+      name: prefix2 + "_dispatch"
+    });
+    if ([
+      "snapshot-land@v1",
+      "snapshot-to-databricks@v1",
+      metadataStandard
+    ].includes(w.standard))
+      resources.push({
+        scope: binding.factoryName,
+        kind: "dataset",
+        name: prefix2 + "_inputs"
+      });
+    const slots = schedule.recurrence.kind === "interval" ? [null] : [...schedule.recurrence.times].sort();
+    for (let index = 0; index < slots.length; index++)
+      resources.push({
+        scope: binding.factoryName,
+        kind: "trigger",
+        name: prefix2 + "_" + String(index + 1).padStart(3, "0")
+      });
+  }
   const datasets = {};
   if (w.handover) {
-    check6(
-      w.standard === "snapshot-land@v1",
+    check7(
+      ["snapshot-land@v1", "immutable-file-copy@v1"].includes(w.standard),
       "File handovers require snapshot-land@v1"
     );
-    check6(
+    check7(
       Object.keys(w.handover).length === 1 && typeof w.handover.binding === "string",
       "Handover requires only an ADLS binding"
     );
     const landing = request.bindings[w.handover.binding];
-    check6(
+    check7(
       landing?.kind === "adls" && /^[a-z0-9]{3,24}$/.test(landing.accountName),
       "Handover requires an ADLS account binding"
     );
+    const published = JSON.parse(JSON.stringify(n.contract));
+    if (w.standard !== "immutable-file-copy@v1")
+      for (const object2 of published.schema ?? [])
+        for (const property2 of object2.properties ?? [])
+          delete property2.physicalName;
     datasets.snapshot = {
-      contract: n.contract,
+      contract: published,
       location: {
         kind: "files",
         binding: w.handover.binding,
         name: `abfss://${w.target.fileSystem}@${landing.accountName}.dfs.core.windows.net/${w.target.path}/${n.flow}/${n.table}`,
-        format: "parquet",
-        protocol: "ingestron.snapshot-landing/v1",
+        format: w.standard === "immutable-file-copy@v1" ? n.source.format : "parquet",
+        protocol: w.standard === "immutable-file-copy@v1" ? "ingestron.immutable-file-landing/v1" : "ingestron.snapshot-landing/v1",
+        ...w.standard === "immutable-file-copy@v1" ? {
+          reader: n.source.format === "csv" ? { header: true, delimiter: "," } : { multiLine: true }
+        } : {},
         dataset: `${request.project}.${n.flow}.${n.table}`,
         completion: "requires-successful-adf-run",
         pipeline: name
@@ -8469,9 +8811,20 @@ function model(request) {
   return { with: w, datasets, targets: [], resources };
 }
 function validateOutput(request) {
-  check6(
+  check7(
     request.files["adf-template.json"],
     "ADF export requires adf-template.json"
+  );
+  const scheduleManifest = request.files["adf-schedules.json"] ? JSON.parse(request.files["adf-schedules.json"]) : null;
+  verifyAdfScheduleOwnership(
+    request.files,
+    JSON.parse(request.files["adf-template.json"]),
+    {
+      project: scheduleManifest?.project,
+      scope: {
+        flows: scheduleManifest?.schedules?.map((entry) => entry.flow) ?? []
+      }
+    }
   );
   command({
     apiVersion: "ingestron.provider-command-request/v1",
@@ -8482,7 +8835,15 @@ function validateOutput(request) {
   return { documents: [] };
 }
 function author(request) {
+  if (request.operation === "file_handoff")
+    return {
+      files: {
+        "handoff.json": JSON.stringify(authorFileHandoff(request.options))
+      }
+    };
   const { options } = request;
+  if (request.operation === "platform_binding")
+    return { files: { "binding.yaml": stringify3(bindPlatform(options)) } };
   if (request.operation === "initialise") {
     const files2 = {
       "project.yaml": stringify3({
@@ -8520,21 +8881,22 @@ Configure existing ADF resources in environments/*.yaml. Add a snapshot-land@v1 
       });
     return { files: files2 };
   }
-  check6(
+  check7(
     request.operation === "flow" && options.kind === "ingestion",
     "ADF currently authors ingestion flows only"
   );
   const standard = options.standard ?? "snapshot-land@v1", file = standard === "immutable-file-copy@v1";
-  check6(
+  check7(
     [
       "snapshot-land@v1",
       "snapshot-to-databricks@v1",
-      "immutable-file-copy@v1"
+      "immutable-file-copy@v1",
+      watermarkStandard
     ].includes(standard),
     "Choose a supported ADF standard"
   );
   const sourceKind = options.sourceKind ?? (file ? "adls" : "azure-sql");
-  check6(
+  check7(
     (file ? ["adls", "sftp"] : ["azure-sql", "sql-server"]).includes(
       sourceKind
     ),
@@ -8551,11 +8913,11 @@ Configure existing ADF resources in environments/*.yaml. Add a snapshot-land@v1 
     if (sourceKind === "adls")
       values.source_filesystem = { $env: "ADF_SOURCE_FILESYSTEM" };
   }
-  check6(
+  check7(
     !options.sourceBinding,
     "ADF authoring uses linked-service environment values, not --source-binding"
   );
-  check6(
+  check7(
     options.format === void 0 || (file ? ["csv", "tsv", "json", "jsonl", "parquet", "xml", "xlsx"].includes(
       options.format
     ) : options.format === "parquet"),
@@ -8569,6 +8931,17 @@ Configure existing ADF resources in environments/*.yaml. Add a snapshot-land@v1 
       path: request.project.id
     }
   };
+  if (standard === watermarkStandard) {
+    values.control_linked_service = { $env: "ADF_CONTROL_LINKED_SERVICE" };
+    ingestion.watermark = {
+      column: "id",
+      initial: "0",
+      batchSize: 1e5,
+      namespace: options.id,
+      consistency: "ordered-committed-append",
+      controlLinkedService: "{{values.control_linked_service}}"
+    };
+  }
   if (standard === "snapshot-to-databricks@v1") {
     values.storage_account = { $env: "ADF_STORAGE_ACCOUNT" };
     values.publisher_linked_service = { $env: "ADF_PUBLISHER_LINKED_SERVICE" };
@@ -8592,7 +8965,7 @@ Configure existing ADF resources in environments/*.yaml. Add a snapshot-land@v1 
     } : {
       schema: "dbo",
       table: "{{table.id}}",
-      consistency: "frozen-extract"
+      consistency: standard === watermarkStandard ? "ordered-committed-append" : "frozen-extract"
     }
   };
   const files = {

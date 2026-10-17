@@ -1,3 +1,9 @@
+import { adfScheduleFlows, renderAdfSchedules } from "./schedules.mjs";
+import {
+  watermarkStandard,
+  validateWatermark,
+  renderWatermark,
+} from "./watermark.mjs";
 import {
   metadataStandard,
   metadataNames,
@@ -8,8 +14,12 @@ import { validatePublication, publicationPipeline } from "./publication.mjs";
 import { sqlSources, sqlKinds, selectQuery } from "./sql-sources.mjs";
 import { qualityRules, qualityQuery, passingExpression } from "./quality.mjs";
 import { appSources } from "./app-sources.mjs";
-const check = (ok, message) => {
-  if (!ok) throw new Error(message);
+const check = (ok, message, reason) => {
+  if (!ok) {
+    const error = new Error(message);
+    if (reason) error.reason = reason;
+    throw error;
+  }
 };
 const ident = (v) =>
   typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v);
@@ -37,6 +47,14 @@ const strict = (v, keys, label) =>
     `Unsupported ${label} settings`,
   );
 export const standards = [
+  {
+    id: watermarkStandard,
+    sources: ["azure-sql", "sql-server"],
+    dataFlow: "forbidden",
+    consistency: "ordered-committed-append",
+    delivery:
+      "bounded Parquet batches published by an atomic Azure SQL watermark and committed-delivery journal",
+  },
   {
     id: metadataStandard,
     sources: ["azure-sql", "sql-server"],
@@ -76,13 +94,17 @@ export const standards = [
   },
   {
     id: "immutable-file-copy@v1",
-    sources: ["adls", "s3", "gcs", "sftp"],
+    sources: ["adls", "azure-blob", "s3", "gcs", "sftp"],
     dataFlow: "forbidden",
     consistency: "completed immutable file",
     delivery: "one preserved binary file per run",
   },
 ];
-const checked = new Set(["snapshot-land@v1", "snapshot-to-databricks@v1"]);
+const checked = new Set([
+  "snapshot-land@v1",
+  "snapshot-to-databricks@v1",
+  watermarkStandard,
+]);
 export function expand({ flow, providerSource, columns = {} }) {
   check(flow.kind === "ingestion", "ADF standards require ingestion flows");
   strict(
@@ -95,6 +117,7 @@ export function expand({ flow, providerSource, columns = {} }) {
       "handover",
       "group",
       "parallelism",
+      "watermark",
     ],
     "ingestion",
   );
@@ -106,9 +129,33 @@ export function expand({ flow, providerSource, columns = {} }) {
   );
   const steps = Object.entries(flow.tables ?? {}).map(([table, value]) => {
     check(
-      !value.ingestion && !Object.keys(value.steps ?? {}).length,
-      "ADF table ingestion/step overrides are not supported",
+      !Object.keys(value.steps ?? {}).length,
+      "ADF table step overrides are not supported",
     );
+    if (standard.id === watermarkStandard) {
+      if (value.ingestion)
+        strict(value.ingestion, ["watermark"], "table ingestion");
+      if (value.ingestion?.watermark)
+        strict(
+          value.ingestion.watermark,
+          ["column", "initial", "batchSize"],
+          "table watermark",
+        );
+    } else
+      check(
+        !value.ingestion,
+        "ADF table ingestion overrides require the append watermark standard",
+      );
+    const settings =
+      standard.id === watermarkStandard
+        ? {
+            ...flow.ingestion,
+            watermark: {
+              ...flow.ingestion.watermark,
+              ...value.ingestion?.watermark,
+            },
+          }
+        : flow.ingestion;
     // SQL snapshots check contract rules on the frozen source before Copy.
     const quality =
       checked.has(standard.id) && value.contract
@@ -118,7 +165,7 @@ export function expand({ flow, providerSource, columns = {} }) {
       id: `copy_${table}`,
       uses: "copy@v1",
       select: [table],
-      with: quality.length ? { ...flow.ingestion, quality } : flow.ingestion,
+      with: quality.length ? { ...settings, quality } : settings,
     };
   });
   return {
@@ -130,9 +177,11 @@ export function expand({ flow, providerSource, columns = {} }) {
       actualCompleteness: "unverified",
       replaySource: "source-owner-retention",
       detail:
-        standard.id === "snapshot-to-databricks@v1"
-          ? "Copy, count gate, then versioned native Databricks publication. Recover publication with the original run receipt; never recopy an already committed delivery."
-          : "Each run creates an isolated landing directory. Failed runs are unpublished. No automatic deduplication, watermark or cumulative delivery-index publication.",
+        standard.id === watermarkStandard
+          ? "Copy only a bounded ordered immutable key range. Failed or competing landings are unpublished; the watermark and delivery journal commit atomically. Plan changes require a reviewed explicit state namespace or migration."
+          : standard.id === "snapshot-to-databricks@v1"
+            ? "Copy, count gate, then versioned native Databricks publication. Recover publication with the original run receipt; never recopy an already committed delivery."
+            : "Each run creates an isolated landing directory. Failed runs are unpublished. No automatic deduplication, watermark or cumulative delivery-index publication.",
       assumptions: [
         standard.consistency,
         "Existing linked services and runtime connectivity are separately accepted.",
@@ -141,6 +190,7 @@ export function expand({ flow, providerSource, columns = {} }) {
   };
 }
 export function validate(plan) {
+  adfScheduleFlows(plan);
   check(plan.nodes.length > 0, "ADF export requires nodes");
   const names = new Set();
   for (const n of plan.nodes) {
@@ -163,13 +213,28 @@ export function validate(plan) {
       "Invalid or colliding ADF resource name",
     );
     names.add(name);
+    const physicalColumns = new Set(),
+      outputColumns = new Set();
+    for (const column of n.columns ?? []) {
+      const physical = column.name,
+        output = column.target ?? physical;
+      check(
+        ident(physical) &&
+          ident(output) &&
+          !physicalColumns.has(physical.toLowerCase()) &&
+          !outputColumns.has(output.toLowerCase()),
+        "Invalid or case-ambiguous source/output column mapping",
+      );
+      physicalColumns.add(physical.toLowerCase());
+      outputColumns.add(output.toLowerCase());
+    }
     const binding = plan.bindings[n.binding];
     strict(binding, ["kind", "factoryName"], "ADF binding");
     check(
       binding.kind === "adf" && resource(binding.factoryName),
       "Reference an existing ADF factoryName",
     );
-    strict(n.runtime.options ?? {}, ["timeout"], "provider");
+    strict(n.runtime.options ?? {}, ["timeout", "scheduleInputs"], "provider");
     const s = n.source,
       w = n.with,
       t = w.target;
@@ -185,6 +250,7 @@ export function validate(plan) {
         "group",
         "parallelism",
         "quality",
+        "watermark",
       ],
       "standard",
     );
@@ -235,7 +301,9 @@ export function validate(plan) {
         w.publication === undefined && t.storageAccount === undefined,
         "Publication settings require snapshot-to-databricks@v1",
       );
-    if (w.standard === "app-land@v1") {
+    if (w.standard === watermarkStandard) {
+      validateWatermark(plan, n);
+    } else if (w.standard === "app-land@v1") {
       strict(s, ["kind", "linkedService", "object"], "application source");
       const app = appSources[s.kind];
       check(
@@ -309,6 +377,7 @@ export function validate(plan) {
       check(
         s.consistency === "frozen-extract",
         "Snapshot source must remain immutable throughout extraction and retries; mutable live-table reads are not complete snapshots",
+        "SOURCE_CONSISTENCY",
       );
       check(
         resource(s.linkedService) && ident(s.schema) && sqlTable(s.table),
@@ -334,6 +403,7 @@ export function validate(plan) {
           "linkedService",
           "fileSystem",
           "bucket",
+          "container",
           "folder",
           "fileName",
           "path",
@@ -348,7 +418,7 @@ export function validate(plan) {
         "Name the file with path, or with folder and fileName, not both",
       );
       check(
-        ["adls", "s3", "gcs", "sftp"].includes(s.kind) &&
+        ["adls", "azure-blob", "s3", "gcs", "sftp"].includes(s.kind) &&
           resource(s.linkedService),
         "Files support ADLS, S3, Google Cloud Storage and SFTP only",
       );
@@ -358,6 +428,12 @@ export function validate(plan) {
             s.format,
           ),
         "Unsupported source file format",
+      );
+      check(
+        s.kind === "azure-blob"
+          ? /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(s.container)
+          : s.container === undefined,
+        "Azure Blob needs a container",
       );
       const { folder, fileName } = fileLocation(s);
       check(
@@ -447,6 +523,10 @@ export function render(plan) {
     renderMetadata(plan, add, assets);
   else
     for (const n of plan.nodes) {
+      if (n.with.standard === watermarkStandard) {
+        renderWatermark(plan, n, add, assets);
+        continue;
+      }
       const s = n.source,
         w = n.with,
         t = w.target,
@@ -481,8 +561,13 @@ export function render(plan) {
                 fileName,
               }
             : {
-                type: "AzureBlobFSLocation",
-                fileSystem: s.fileSystem,
+                type:
+                  s.kind === "azure-blob"
+                    ? "AzureBlobStorageLocation"
+                    : "AzureBlobFSLocation",
+                ...(s.kind === "azure-blob"
+                  ? { container: s.container }
+                  : { fileSystem: s.fileSystem }),
                 ...(folder ? { folderPath: folder } : {}),
                 fileName,
               };
@@ -560,7 +645,9 @@ export function render(plan) {
                             ? "AmazonS3ReadSettings"
                             : s.kind === "gcs"
                               ? "GoogleCloudStorageReadSettings"
-                              : "AzureBlobFSReadSettings",
+                              : s.kind === "azure-blob"
+                                ? "AzureBlobStorageReadSettings"
+                                : "AzureBlobFSReadSettings",
                       recursive: false,
                     },
                   },
@@ -737,6 +824,7 @@ export function render(plan) {
         pipelineDependencies,
       );
     }
+  renderAdfSchedules(plan, add, assets);
   assets["adf-template.json"] = {
     format: "json",
     value: {
@@ -767,6 +855,6 @@ export function render(plan) {
   };
   if (plan.nodes[0].with.standard === metadataStandard)
     assets["README.md"].value =
-      "# Metadata-driven ADF snapshots\n\nDeploy adf-template.json incrementally into the existing factory after review.\nEach named compatible group has a coordinator, worker and two datasets.\nmetadata/*.json records the compiler-reviewed catalogue; the deployed worker embeds\nit and accepts only tableId and expectedRowCount. Call the coordinator with tables\nand expectedCounts, or retry one failed table with a fresh worker run. Fill every\nselected count from an independently frozen source; null example values must be\nreplaced. Tables default to the compiled group. Shared linked services and identities\nremain externally owned. No schedules, control database or Data Flow are created.\n\nUse the worker runId from the ExecutePipeline activity output, not the coordinator\nrunId, to locate folder/<worker runId>/. Only Succeeded workers passing VerifyCount\nare eligible for consumption. A failed coordinator may contain successful workers;\nthere is no atomic group commit or cumulative publication index. Do not replay already\nconsumed tables without downstream duplicate handling. Failed folders are retained;\ncopy retries are zero and recovery uses fresh run folders. Source consistency,\nretention, keys/null checks, cross-table consistency and downstream publication remain\noperator responsibilities. See the provider docs/metadata-pipelines.md for limits.\n";
+      "# Metadata-driven ADF snapshots\n\nDeploy adf-template.json incrementally into the existing factory after review.\nEach named compatible group has a coordinator, worker and two datasets.\nmetadata/*.json records the compiler-reviewed catalogue; the deployed worker embeds\nit and accepts only tableId and expectedRowCount. Call the coordinator with tables\nand expectedCounts, or retry one failed table with a fresh worker run. Fill every\nselected count from an independently frozen source; null example values must be\nreplaced. Tables default to the compiled group. Shared linked services and identities\nremain externally owned. Reviewed schedules are generated separately when configured. No control database or Data Flow is created.\n\nUse the worker runId from the ExecutePipeline activity output, not the coordinator\nrunId, to locate folder/<worker runId>/. Only Succeeded workers passing VerifyCount\nare eligible for consumption. A failed coordinator may contain successful workers;\nthere is no atomic group commit or cumulative publication index. Do not replay already\nconsumed tables without downstream duplicate handling. Failed folders are retained;\ncopy retries are zero and recovery uses fresh run folders. Source consistency,\nretention, keys/null checks, cross-table consistency and downstream publication remain\noperator responsibilities. See the provider docs/metadata-pipelines.md for limits.\n";
   return assets;
 }

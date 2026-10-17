@@ -128,9 +128,35 @@ function inspect(artifact, context) {
         "Microsoft.DataFactory/factories/pipelines",
         "Microsoft.DataFactory/factories/datasets",
         "Microsoft.DataFactory/factories/linkedservices",
+        "Microsoft.DataFactory/factories/triggers",
       ].includes(
         resource.type,
-      ), "Only explicit ADF pipeline, dataset and linked-service resources are supported");
+      ), "Only explicit ADF pipeline, dataset, linked-service and schedule-trigger resources are supported");
+      if (resource.type === "Microsoft.DataFactory/factories/triggers") {
+        const properties = resource.properties,
+          recurrence = properties?.typeProperties?.recurrence;
+        require(properties?.type === "ScheduleTrigger" &&
+          recurrence &&
+          ["Minute", "Hour", "Day", "Week", "Month"].includes(
+            recurrence.frequency,
+          ) &&
+          Number.isInteger(recurrence.interval) &&
+          recurrence.interval >= 1 &&
+          recurrence.interval <= 1000 &&
+          typeof recurrence.startTime === "string" &&
+          typeof recurrence.timeZone ===
+            "string", "Inspect only explicit native ScheduleTrigger recurrences");
+        require(Array.isArray(properties.pipelines) &&
+          properties.pipelines.length > 0 &&
+          properties.pipelines.every(
+            (pipeline) =>
+              pipeline.pipelineReference?.type === "PipelineReference" &&
+              typeof pipeline.pipelineReference.referenceName === "string" &&
+              pipeline.parameters &&
+              typeof pipeline.parameters === "object" &&
+              !Array.isArray(pipeline.parameters),
+          ), "Schedule trigger pipelines require explicit references and parameters");
+      }
       const identity = resource.type + ":" + resource.name;
       require(!names.has(identity), "Duplicate resource identity");
       names.add(identity);

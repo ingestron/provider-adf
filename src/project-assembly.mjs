@@ -1,3 +1,4 @@
+import { verifyAdfScheduleOwnership } from "./schedule-ownership.mjs";
 const check = (v, m) => {
   if (!v) throw Error(m);
 };
@@ -54,6 +55,7 @@ export function assemble(input) {
         contentVersion: "1.0.0.0",
         resources: [],
       };
+  verifyAdfScheduleOwnership(artifacts, template, input);
   const resources = new Map();
   const key = (r) => {
     const match =

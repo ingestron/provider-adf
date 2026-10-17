@@ -42,7 +42,10 @@ Requires Ingestron core 0.12.12 or later.
 
 ## Guides
 
+- [Private candidate native date and clock quality](docs/temporal-quality.md)
+
 - [Standards](docs/standards.md)
+- [Candidate native SQL append batches](docs/watermark-append.md)
 - [Metadata-driven SQL snapshots](docs/metadata-pipelines.md)
 - [External connectors on ADF Batch](docs/project-connections.md)
 - [Reusable ADF compute](docs/compute-engine.md)
@@ -67,3 +70,26 @@ Use Node 22, pnpm 10.15.0 and Python 3.12. Create `.venv` from
 
 Apache-2.0, copyright Otrera Limited. Third-party material keeps its own terms;
 see [NOTICE](NOTICE). Report security issues as described in [SECURITY.md](SECURITY.md).
+
+Private candidate [installed handover acceptance](docs/installed-native-acceptance.md) checks mapped Parquet schemas through publication and native history.
+
+## Reviewed schedules
+
+The private 4.10.0 candidate generates flow-owned native triggers and guarded
+dispatchers. Snapshot runs read fresh expected counts and publication identities
+from a reviewed source-owner manifest view. Review [schedules](docs/schedules.md)
+for parameter contracts, clock limits and separately authorised activation.
+
+### Guided existing-factory binding (local candidate)
+
+The current provider supports the reviewed `platform_binding` lifecycle contract.
+It accepts only an existing factory name for a non-production Azure CLI profile;
+it does not create resources, carry credential values or accept unsupported scope
+and identity settings silently. Native source declarations, bridge handover,
+schedules and current standards are preserved. Missing frozen-source declarations
+carry the bounded `SOURCE_CONSISTENCY` reason for host recovery guidance.
+
+These additions were initially exercised against the historical private checkout.
+This repository is the registered current owner; subsequent installation and bridge
+acceptance must use its immutable candidate. No public release or deployment is
+implied by local validation.

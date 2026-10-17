@@ -180,3 +180,37 @@ test("SQL table names preserve Northwind spaces and reject SQL metacharacters", 
     assert.throws(() => validate(bad));
   }
 });
+
+test("native SQL Copy preserves simultaneous mappings and rejects case-ambiguous schemas", () => {
+  const p = plan();
+  p.nodes[0].columns[0].target = "name";
+  p.nodes[0].columns[1].target = "id";
+  const copy =
+    render(p)["pipelines/retail_source_customers.json"].value.properties
+      .activities[0];
+  assert.deepEqual(
+    copy.typeProperties.translator.mappings.map((m) => [
+      m.source.name,
+      m.sink.name,
+    ]),
+    [
+      ["id", "name"],
+      ["name", "id"],
+    ],
+  );
+  p.nodes[0].columns[0].target = "key";
+  p.nodes[0].columns[1].target = "KEY";
+  assert.throws(() => validate(p), /case-ambiguous/);
+  p.nodes[0].columns[1].target = "other";
+  p.nodes[0].columns[1].name = "ID";
+  assert.throws(() => validate(p), /case-ambiguous/);
+});
+
+test("missing snapshot consistency has a bounded recovery reason", () => {
+  const p = plan();
+  delete p.nodes[0].source.consistency;
+  assert.throws(
+    () => validate(p),
+    (error) => error.reason === "SOURCE_CONSISTENCY",
+  );
+});

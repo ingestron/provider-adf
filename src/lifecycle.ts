@@ -1,3 +1,7 @@
+import { authorFileHandoff } from "./file-handoff.mjs";
+import { bindPlatform } from "./platform-binding.mjs";
+import { verifyAdfScheduleOwnership } from "./schedule-ownership.mjs";
+import { watermarkStandard } from "./watermark.mjs";
 import { metadataStandard, metadataNames } from "./metadata.mjs";
 import { stringify, parseDocument } from "yaml";
 import { command } from "./commands.mjs";
@@ -35,10 +39,54 @@ export function model(request: any) {
       })),
     );
   }
+  if (w.standard === watermarkStandard)
+    resources.push(
+      {
+        scope: binding.factoryName,
+        kind: "dataset",
+        name: name + "_control",
+      },
+      {
+        scope: binding.factoryName,
+        kind: "pipeline",
+        name: name + "_batch",
+      },
+    );
+  const schedule = request.flowContext?.schedule;
+  if (schedule && request.flowContext.tableIds[0] === n.table) {
+    const prefix = `${request.project}_${n.flow}_schedule`;
+    resources.push({
+      scope: binding.factoryName,
+      kind: "pipeline",
+      name: prefix + "_dispatch",
+    });
+    if (
+      [
+        "snapshot-land@v1",
+        "snapshot-to-databricks@v1",
+        metadataStandard,
+      ].includes(w.standard)
+    )
+      resources.push({
+        scope: binding.factoryName,
+        kind: "dataset",
+        name: prefix + "_inputs",
+      });
+    const slots =
+      schedule.recurrence.kind === "interval"
+        ? [null]
+        : [...schedule.recurrence.times].sort();
+    for (let index = 0; index < slots.length; index++)
+      resources.push({
+        scope: binding.factoryName,
+        kind: "trigger",
+        name: prefix + "_" + String(index + 1).padStart(3, "0"),
+      });
+  }
   const datasets: any = {};
   if (w.handover) {
     check(
-      w.standard === "snapshot-land@v1",
+      ["snapshot-land@v1", "immutable-file-copy@v1"].includes(w.standard),
       "File handovers require snapshot-land@v1",
     );
     check(
@@ -51,14 +99,31 @@ export function model(request: any) {
       landing?.kind === "adls" && /^[a-z0-9]{3,24}$/.test(landing.accountName),
       "Handover requires an ADLS account binding",
     );
+    const published = JSON.parse(JSON.stringify(n.contract));
+    if (w.standard !== "immutable-file-copy@v1")
+      for (const object of published.schema ?? [])
+        for (const property of object.properties ?? [])
+          delete property.physicalName;
     datasets.snapshot = {
-      contract: n.contract,
+      contract: published,
       location: {
         kind: "files",
         binding: w.handover.binding,
         name: `abfss://${w.target.fileSystem}@${landing.accountName}.dfs.core.windows.net/${w.target.path}/${n.flow}/${n.table}`,
-        format: "parquet",
-        protocol: "ingestron.snapshot-landing/v1",
+        format:
+          w.standard === "immutable-file-copy@v1" ? n.source.format : "parquet",
+        protocol:
+          w.standard === "immutable-file-copy@v1"
+            ? "ingestron.immutable-file-landing/v1"
+            : "ingestron.snapshot-landing/v1",
+        ...(w.standard === "immutable-file-copy@v1"
+          ? {
+              reader:
+                n.source.format === "csv"
+                  ? { header: true, delimiter: "," }
+                  : { multiLine: true },
+            }
+          : {}),
         dataset: `${request.project}.${n.flow}.${n.table}`,
         completion: "requires-successful-adf-run",
         pipeline: name,
@@ -72,6 +137,20 @@ export function validateOutput(request: any) {
     request.files["adf-template.json"],
     "ADF export requires adf-template.json",
   );
+  const scheduleManifest = request.files["adf-schedules.json"]
+    ? JSON.parse(request.files["adf-schedules.json"])
+    : null;
+  verifyAdfScheduleOwnership(
+    request.files,
+    JSON.parse(request.files["adf-template.json"]),
+    {
+      project: scheduleManifest?.project,
+      scope: {
+        flows:
+          scheduleManifest?.schedules?.map((entry: any) => entry.flow) ?? [],
+      },
+    },
+  );
   command({
     apiVersion: "ingestron.provider-command-request/v1",
     command: "deploy inspect",
@@ -81,7 +160,15 @@ export function validateOutput(request: any) {
   return { documents: [] };
 }
 export function author(request: any) {
+  if (request.operation === "file_handoff")
+    return {
+      files: {
+        "handoff.json": JSON.stringify(authorFileHandoff(request.options)),
+      },
+    };
   const { options } = request;
+  if (request.operation === "platform_binding")
+    return { files: { "binding.yaml": stringify(bindPlatform(options)) } };
   if (request.operation === "initialise") {
     const files: any = {
       "project.yaml": stringify({
@@ -128,6 +215,7 @@ export function author(request: any) {
       "snapshot-land@v1",
       "snapshot-to-databricks@v1",
       "immutable-file-copy@v1",
+      watermarkStandard,
     ].includes(standard),
     "Choose a supported ADF standard",
   );
@@ -170,6 +258,17 @@ export function author(request: any) {
       path: request.project.id,
     },
   };
+  if (standard === watermarkStandard) {
+    values.control_linked_service = { $env: "ADF_CONTROL_LINKED_SERVICE" };
+    ingestion.watermark = {
+      column: "id",
+      initial: "0",
+      batchSize: 100000,
+      namespace: options.id,
+      consistency: "ordered-committed-append",
+      controlLinkedService: "{{values.control_linked_service}}",
+    };
+  }
   if (standard === "snapshot-to-databricks@v1") {
     values.storage_account = { $env: "ADF_STORAGE_ACCOUNT" };
     values.publisher_linked_service = { $env: "ADF_PUBLISHER_LINKED_SERVICE" };
@@ -197,7 +296,10 @@ export function author(request: any) {
       : {
           schema: "dbo",
           table: "{{table.id}}",
-          consistency: "frozen-extract",
+          consistency:
+            standard === watermarkStandard
+              ? "ordered-committed-append"
+              : "frozen-extract",
         }),
   };
   const files: any = {

@@ -1,0 +1,72 @@
+apiVersion: ingestron.project/v1
+id: retail
+providers:
+  configurations:
+    landing:
+      package: adf
+      binding: factory
+defaults:
+  provider: landing
+environments:
+  dev:
+    apiVersion: ingestron.environment/v1
+    environment: dev
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-retail-dev
+  prod:
+    apiVersion: ingestron.environment/v1
+    environment: prod
+    bindings:
+      factory:
+        kind: adf
+        factoryName: adf-retail-prod
+flows:
+  - apiVersion: ingestron.flow/v1
+    kind: ingestion
+    id: source
+    ingestion:
+      standard: watermark-append-land@v1
+      target:
+        linkedService: landing_adls
+        fileSystem: landing
+        path: retail
+      watermark:
+        column: id
+        initial: "0"
+        batchSize: 100000
+        namespace: source_v1
+        consistency: ordered-committed-append
+        controlLinkedService: control_sql
+    defaults:
+      source:
+        kind: azure-sql
+        linkedService: source_sql
+        schema: dbo
+        table: customers
+        consistency: ordered-committed-append
+    tables:
+      customers:
+        contract:
+          apiVersion: v3.1.0
+          kind: DataContract
+          id: customers
+          name: customers
+          version: 1.0.0
+          status: draft
+          schema:
+            - name: customers
+              logicalType: object
+              physicalType: table
+              properties:
+                - name: id
+                  logicalType: integer
+                  physicalType: BIGINT
+                  required: true
+                  primaryKey: true
+                - name: name
+                  logicalType: string
+                  physicalType: STRING
+packages:
+  adf: ingestron/provider-adf/plugin/provider.yaml@4.8.0

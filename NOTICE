@@ -13,3 +13,7 @@ licence above:
 - examples/discovery-showcase downloads public sample databases (Microsoft
   Northwind, MIT; Pagila, PostgreSQL licence) at pinned revisions; see
   examples/discovery-showcase/public-data.lock.json and its licenses folder.
+
+Unicode CLDR release-48 time-zone mapping data is used under Unicode-3.0.
+Exact notices: plugin/UNICODE-LICENSE.txt and src/vendor/unicode/UNICODE-LICENSE.txt.
+Pinned upstream file provenance: src/vendor/unicode/provenance.json.
