@@ -172,6 +172,10 @@ manifest.commands.definitions.push({
   description: "Assemble one scoped platform project without deployment",
   inputSchema: { type: "object", additionalProperties: true },
 });
+manifest.fileHandoff = {
+  apiVersion: "ingestron.file-handoff/v1",
+  role: "producer",
+};
 const { format } = await import("prettier");
 writeFileSync(
   "src/windows-zones.mjs",

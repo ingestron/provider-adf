@@ -2,6 +2,7 @@
 const factoryPattern = "^[A-Za-z_][A-Za-z0-9_-]{0,100}$";
 export const platformBinding = {
   apiVersion: "ingestron.platform-binding-authoring/v1",
+  designResources: { factoryName: "design_factory" },
   resourcesSchema: {
     type: "object",
     additionalProperties: false,

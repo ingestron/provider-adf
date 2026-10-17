@@ -94,7 +94,7 @@ export const standards = [
   },
   {
     id: "immutable-file-copy@v1",
-    sources: ["adls", "s3", "gcs", "sftp"],
+    sources: ["adls", "azure-blob", "s3", "gcs", "sftp"],
     dataFlow: "forbidden",
     consistency: "completed immutable file",
     delivery: "one preserved binary file per run",
@@ -403,6 +403,7 @@ export function validate(plan) {
           "linkedService",
           "fileSystem",
           "bucket",
+          "container",
           "folder",
           "fileName",
           "path",
@@ -417,7 +418,7 @@ export function validate(plan) {
         "Name the file with path, or with folder and fileName, not both",
       );
       check(
-        ["adls", "s3", "gcs", "sftp"].includes(s.kind) &&
+        ["adls", "azure-blob", "s3", "gcs", "sftp"].includes(s.kind) &&
           resource(s.linkedService),
         "Files support ADLS, S3, Google Cloud Storage and SFTP only",
       );
@@ -427,6 +428,12 @@ export function validate(plan) {
             s.format,
           ),
         "Unsupported source file format",
+      );
+      check(
+        s.kind === "azure-blob"
+          ? /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(s.container)
+          : s.container === undefined,
+        "Azure Blob needs a container",
       );
       const { folder, fileName } = fileLocation(s);
       check(
@@ -554,8 +561,13 @@ export function render(plan) {
                 fileName,
               }
             : {
-                type: "AzureBlobFSLocation",
-                fileSystem: s.fileSystem,
+                type:
+                  s.kind === "azure-blob"
+                    ? "AzureBlobStorageLocation"
+                    : "AzureBlobFSLocation",
+                ...(s.kind === "azure-blob"
+                  ? { container: s.container }
+                  : { fileSystem: s.fileSystem }),
                 ...(folder ? { folderPath: folder } : {}),
                 fileName,
               };
@@ -633,7 +645,9 @@ export function render(plan) {
                             ? "AmazonS3ReadSettings"
                             : s.kind === "gcs"
                               ? "GoogleCloudStorageReadSettings"
-                              : "AzureBlobFSReadSettings",
+                              : s.kind === "azure-blob"
+                                ? "AzureBlobStorageReadSettings"
+                                : "AzureBlobFSReadSettings",
                       recursive: false,
                     },
                   },

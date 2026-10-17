@@ -40,7 +40,7 @@ test("snapshot handover names the generated root, completion boundary and owned 
 });
 test("unsupported handover standards and bindings fail closed", () => {
   const r = request();
-  r.node.with.standard = "immutable-file-copy@v1";
+  r.node.with.standard = "unsupported@v1";
   assert.throws(() => model(r), /snapshot-land/);
   r.node.with.standard = "snapshot-land@v1";
   r.bindings.files.kind = "sftp";

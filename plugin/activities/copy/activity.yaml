@@ -59,6 +59,7 @@ requirements:
       mysql,
       oracle,
       adls,
+      azure-blob,
       s3,
       gcs,
       sftp,

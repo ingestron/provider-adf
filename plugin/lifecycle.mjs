@@ -1,3 +1,47 @@
+// src/file-handoff.mjs
+function authorFileHandoff(o) {
+  if (!/^[A-Za-z_][\w-]{0,65}$/.test(o.id) || !o.tables?.length || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(o.container))
+    throw Error("Choose reviewed Azure Blob files and a container");
+  const tables = {};
+  for (const t of o.tables) {
+    if (!/^[A-Za-z_][\w-]*$/.test(t.id) || !["json", "csv"].includes(t.format) || !t.path.endsWith("." + t.format) || !t.path.split("/").every((p) => /^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(p)))
+      throw Error(
+        "Handoff supports exact JSON/CSV files without wildcards or traversal"
+      );
+    tables[t.id] = {
+      source: {
+        kind: "azure-blob",
+        linkedService: "design_blob_source",
+        container: o.container,
+        path: t.path,
+        format: t.format,
+        completion: "immutable"
+      },
+      contract: t.contract
+    };
+  }
+  return {
+    flow: {
+      apiVersion: "ingestron.flow/v1",
+      id: o.id,
+      kind: "ingestion",
+      provider: o.provider,
+      description: `Design handoff from ${o.origin}; verify immutable files, linked services and completed-batch orchestration before deployment.`,
+      ingestion: {
+        standard: "immutable-file-copy@v1",
+        target: {
+          linkedService: "design_landing",
+          fileSystem: "design-landing",
+          path: o.id
+        },
+        handover: { binding: o.binding }
+      },
+      tables
+    },
+    bindings: { [o.binding]: { kind: "adls", accountName: "designlanding" } }
+  };
+}
+
 // src/platform-binding.mjs
 var factoryPattern = "^[A-Za-z_][A-Za-z0-9_-]{0,100}$";
 function bindPlatform({ profile, resources, projectId, environment }) {
@@ -8730,7 +8774,7 @@ function model(request) {
   const datasets = {};
   if (w.handover) {
     check7(
-      w.standard === "snapshot-land@v1",
+      ["snapshot-land@v1", "immutable-file-copy@v1"].includes(w.standard),
       "File handovers require snapshot-land@v1"
     );
     check7(
@@ -8743,17 +8787,21 @@ function model(request) {
       "Handover requires an ADLS account binding"
     );
     const published = JSON.parse(JSON.stringify(n.contract));
-    for (const object2 of published.schema ?? [])
-      for (const property2 of object2.properties ?? [])
-        delete property2.physicalName;
+    if (w.standard !== "immutable-file-copy@v1")
+      for (const object2 of published.schema ?? [])
+        for (const property2 of object2.properties ?? [])
+          delete property2.physicalName;
     datasets.snapshot = {
       contract: published,
       location: {
         kind: "files",
         binding: w.handover.binding,
         name: `abfss://${w.target.fileSystem}@${landing.accountName}.dfs.core.windows.net/${w.target.path}/${n.flow}/${n.table}`,
-        format: "parquet",
-        protocol: "ingestron.snapshot-landing/v1",
+        format: w.standard === "immutable-file-copy@v1" ? n.source.format : "parquet",
+        protocol: w.standard === "immutable-file-copy@v1" ? "ingestron.immutable-file-landing/v1" : "ingestron.snapshot-landing/v1",
+        ...w.standard === "immutable-file-copy@v1" ? {
+          reader: n.source.format === "csv" ? { header: true, delimiter: "," } : { multiLine: true }
+        } : {},
         dataset: `${request.project}.${n.flow}.${n.table}`,
         completion: "requires-successful-adf-run",
         pipeline: name
@@ -8787,6 +8835,12 @@ function validateOutput(request) {
   return { documents: [] };
 }
 function author(request) {
+  if (request.operation === "file_handoff")
+    return {
+      files: {
+        "handoff.json": JSON.stringify(authorFileHandoff(request.options))
+      }
+    };
   const { options } = request;
   if (request.operation === "platform_binding")
     return { files: { "binding.yaml": stringify3(bindPlatform(options)) } };

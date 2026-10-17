@@ -1,3 +1,4 @@
+import { authorFileHandoff } from "./file-handoff.mjs";
 import { bindPlatform } from "./platform-binding.mjs";
 import { verifyAdfScheduleOwnership } from "./schedule-ownership.mjs";
 import { watermarkStandard } from "./watermark.mjs";
@@ -85,7 +86,7 @@ export function model(request: any) {
   const datasets: any = {};
   if (w.handover) {
     check(
-      w.standard === "snapshot-land@v1",
+      ["snapshot-land@v1", "immutable-file-copy@v1"].includes(w.standard),
       "File handovers require snapshot-land@v1",
     );
     check(
@@ -99,17 +100,30 @@ export function model(request: any) {
       "Handover requires an ADLS account binding",
     );
     const published = JSON.parse(JSON.stringify(n.contract));
-    for (const object of published.schema ?? [])
-      for (const property of object.properties ?? [])
-        delete property.physicalName;
+    if (w.standard !== "immutable-file-copy@v1")
+      for (const object of published.schema ?? [])
+        for (const property of object.properties ?? [])
+          delete property.physicalName;
     datasets.snapshot = {
       contract: published,
       location: {
         kind: "files",
         binding: w.handover.binding,
         name: `abfss://${w.target.fileSystem}@${landing.accountName}.dfs.core.windows.net/${w.target.path}/${n.flow}/${n.table}`,
-        format: "parquet",
-        protocol: "ingestron.snapshot-landing/v1",
+        format:
+          w.standard === "immutable-file-copy@v1" ? n.source.format : "parquet",
+        protocol:
+          w.standard === "immutable-file-copy@v1"
+            ? "ingestron.immutable-file-landing/v1"
+            : "ingestron.snapshot-landing/v1",
+        ...(w.standard === "immutable-file-copy@v1"
+          ? {
+              reader:
+                n.source.format === "csv"
+                  ? { header: true, delimiter: "," }
+                  : { multiLine: true },
+            }
+          : {}),
         dataset: `${request.project}.${n.flow}.${n.table}`,
         completion: "requires-successful-adf-run",
         pipeline: name,
@@ -146,6 +160,12 @@ export function validateOutput(request: any) {
   return { documents: [] };
 }
 export function author(request: any) {
+  if (request.operation === "file_handoff")
+    return {
+      files: {
+        "handoff.json": JSON.stringify(authorFileHandoff(request.options)),
+      },
+    };
   const { options } = request;
   if (request.operation === "platform_binding")
     return { files: { "binding.yaml": stringify(bindPlatform(options)) } };

@@ -1220,6 +1220,8 @@ projectAssembly:
   command: project assemble
 platformBinding:
   apiVersion: ingestron.platform-binding-authoring/v1
+  designResources:
+    factoryName: design_factory
   resourcesSchema:
     type: object
     additionalProperties: false
@@ -1230,3 +1232,6 @@ platformBinding:
         type: string
         pattern: ^[A-Za-z_][A-Za-z0-9_-]{0,100}$
         title: Existing ADF factory name
+fileHandoff:
+  apiVersion: ingestron.file-handoff/v1
+  role: producer
